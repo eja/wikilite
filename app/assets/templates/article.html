@@ -1,22 +1,20 @@
 {{template "head.html" . }}
 
-  {{if .Result}}
-    <h1 class="mb-5 text-center">{{.Result.Title}}</h1>
-   
-    {{range .Result.Sections}}
-      <h2 class="mt-4 mb-3">{{.Title}}</h2>
-      <p class="mb-3" style="white-space: pre-line;">{{.Content}}</p>
-    {{end}}
-    
-    <div class="mb-4 text-center">
-      <small><a href="https://{{$.Language}}.wikipedia.org/?curid={{.Result.ID}}">W{{.Result.ID}}</a></small>
-      <small><a href="https://www.wikidata.org/wiki/{{.Result.Entity}}">{{.Result.Entity}}</a></small>
-    </div>
+{{if .Result}}
+  <h1 class="mb-5 text-center">{{.Result.Title}}</h1>
 
-  {{else}}
-    <div class="alert alert-warning">
-      Article not found.
-    </div>
+  {{range .Result.Sections}}
+  <h2 class="mt-4 mb-3">{{.Title}}</h2>
+  <p class="mb-3" style="white-space: pre-line;">{{.Content}}</p>
   {{end}}
+
+  <div class="mb-4 text-center">
+    <small><a href="https://{{$.Language}}.wikipedia.org/?curid={{.Result.ID}}">W{{.Result.ID}}</a></small>
+    <small><a href="https://www.wikidata.org/wiki/{{.Result.Entity}}">{{.Result.Entity}}</a></small>
+  </div>
+
+{{else}}
+  <div class="alert alert-warning">Article not found.</div>
+{{end}}
 
 {{template "foot.html" . }}

@@ -7,35 +7,9 @@
     <link href="//eja.it/logo/eja.png" rel="icon" type="image/png">
     <link href="css/bootstrap.min.css" rel="stylesheet">
     <link href="css/bootstrap-icons.css" rel="stylesheet">
-    <style>
-        .highlight {
-            background-color: #fff3cd;
-            transition: background-color 0.3s;
-        }
-        .highlight-section {
-            background-color: #e2e3e5;
-            transition: background-color 0.3s;
-        }
-        .blinking {
-          animation: blink 1s infinite;
-        }
-        @keyframes blink {
-          0% { opacity: 1; }
-          50% { opacity: 0.5; }
-          100% { opacity: 1; }
-        }
-    </style>
 </head>
 <body>
     <div class="container mt-4">
-        <!-- Microphone -->
-        <div class="position-fixed top-0 end-0">
-          <button type="button" id="speechButton" class="btn">
-            <i class="bi bi-mic-fill fs-4"></i>
-          </button>
-        </div>
-
-        <!-- Search Section -->
         <div id="searchSection">
             <h1 class="mb-4 text-center">Wikilite</h1>
 
@@ -77,7 +51,6 @@
 
         </div>
 
-        <!-- Article Section -->
         <div id="articleContent" class="d-none">
             <h1 id="articleTitle" class="text-center mb-4"></h1>
             <div id="articleTextContent" class="mb-4" style="white-space: pre-wrap;"></div>
@@ -86,10 +59,6 @@
     </div>
 
     <script src="js/bootstrap.bundle.min.js"></script>
-    <script src="js/globals.js"></script>
-    <script src="js/audio.js"></script>
-    <script src="js/search.js"></script>
-    <script src="js/article.js"></script>
-    <script src="js/main.js"></script>
+    <script src="js/wikilite.js"></script>
 </body>
 </html>

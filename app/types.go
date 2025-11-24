@@ -8,6 +8,7 @@ type SearchResult struct {
 	Text      string  `json:"text"`
 	Type      string  `json:"type,omitempty"`
 	Power     float64 `json:"power"`
+	Snippet   string  `json:"snippet"`
 }
 
 type ArticleResultSection struct {

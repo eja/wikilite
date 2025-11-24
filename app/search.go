@@ -107,7 +107,6 @@ func SearchCli() error {
 
 				for _, section := range article.Sections {
 					fmt.Printf("%s\n\n", section.Title)
-					fmt.Println(section.Content)
 					fmt.Println()
 				}
 				query = ""

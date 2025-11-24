@@ -12,10 +12,21 @@ import (
 	"time"
 )
 
+func Snippet(value string) string {
+	if len(value) > 160 {
+		return value[:160] + "..."
+	}
+	return value
+}
+
 func (h *DBHandler) SearchTitle(searchQuery string, limit int) ([]SearchResult, error) {
 	start := time.Now()
 	sqlQuery := `
-		SELECT rowid, title, bm25(article_search) AS power
+		SELECT 
+			rowid, 
+			title, 
+			snippet(article_search, 0, '<mark>', '</mark>', '...', 16) as snippet,
+			bm25(article_search) AS power
 		FROM article_search
 		WHERE article_search MATCH ?
 		ORDER BY power ASC
@@ -31,23 +42,32 @@ func (h *DBHandler) SearchTitle(searchQuery string, limit int) ([]SearchResult, 
 	var results []SearchResult
 	for rows.Next() {
 		var result SearchResult
+		var snippet sql.NullString
 		if err := rows.Scan(
 			&result.ArticleID,
 			&result.Title,
+			&snippet,
 			&result.Power,
 		); err != nil {
 			return nil, err
 		}
 
 		var content sql.NullString
-		contentQuery := `SELECT content FROM sections WHERE article_id = ? LIMIT 1`
+		contentQuery := `SELECT content FROM sections WHERE article_id = ? ORDER BY id LIMIT 1`
 		err = h.db.QueryRow(contentQuery, result.ArticleID).Scan(&content)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, err
 		}
 		if content.Valid {
-			result.Text = content.String
+			result.Text = Snippet(content.String)
 		}
+
+		if snippet.Valid {
+			result.Snippet = snippet.String
+		} else {
+			result.Snippet = Snippet(result.Text)
+		}
+
 		result.Type = "T"
 		results = append(results, result)
 	}
@@ -63,8 +83,9 @@ func (h *DBHandler) SearchContent(searchQuery string, limit int) ([]SearchResult
 		SELECT
 			s.article_id,
 			a.title,
-      s.id,
+			s.id,
 			s.content,
+			snippet(section_search, 1, '<mark>', '</mark>', '...', 64) as snippet,
 			bm25(section_search) as power
 		FROM section_search
 		JOIN sections s ON section_search.rowid = s.id
@@ -84,9 +105,18 @@ func (h *DBHandler) SearchContent(searchQuery string, limit int) ([]SearchResult
 		var result SearchResult
 		var content sql.NullString
 		var sectionId int
-		if err := rows.Scan(&result.ArticleID, &result.Title, &sectionId, &content, &result.Power); err != nil {
+		var snippet sql.NullString
+		if err := rows.Scan(
+			&result.ArticleID,
+			&result.Title,
+			&sectionId,
+			&content,
+			&snippet,
+			&result.Power,
+		); err != nil {
 			return nil, err
 		}
+
 		if content.Valid {
 			result.Text = content.String
 		} else {
@@ -97,6 +127,13 @@ func (h *DBHandler) SearchContent(searchQuery string, limit int) ([]SearchResult
 				}
 			}
 		}
+
+		if snippet.Valid {
+			result.Snippet = snippet.String
+		} else {
+			result.Snippet = Snippet(result.Text)
+		}
+
 		result.Type = "C"
 		results = append(results, result)
 	}
@@ -251,24 +288,25 @@ func (h *DBHandler) SearchVectors(query string, limit int) ([]SearchResult, erro
 			SELECT
 				a.id,
 				a.title,
-				s.title
+				s.content
 			FROM articles a
 			JOIN sections s ON a.id = s.article_id
 			WHERE s.id = ?
 		`
 
 		var result SearchResult
-		var sectionTitle string
+		var sectionContent string
 		err := h.db.QueryRow(sqlQuery, vd.ID).Scan(
 			&result.ArticleID,
 			&result.Title,
-			&sectionTitle,
+			&sectionContent,
 		)
 		if err != nil && err != sql.ErrNoRows {
 			return nil, err
 		}
 
-		result.Text = sectionTitle
+		result.Text = sectionContent
+		result.Snippet = Snippet(sectionContent)
 		result.Type = "V"
 		result.Power = float64(vd.Distance)
 		results = append(results, result)

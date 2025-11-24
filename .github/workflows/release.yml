@@ -163,7 +163,7 @@ jobs:
       - name: Copy package files
         run: |
           mkdir -p termux-packages/packages/
-          cp -r ./termux/packages/* termux-packages/packages/
+          cp -r ./android/termux/packages/* termux-packages/packages/
 
       - name: Build wikilite package
         run: |
@@ -199,7 +199,7 @@ jobs:
       - name: Copy package files
         run: |
           mkdir -p termux-packages/packages/
-          cp -r ./termux/packages/* termux-packages/packages/
+          cp -r ./android/termux/packages/* termux-packages/packages/
 
       - name: Build wikilite package
         run: |

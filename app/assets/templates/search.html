@@ -1,36 +1,56 @@
 {{template "head.html" . }}
 
+<style>
+p i { background-color: yellow; }
+</style>
+
 <h1 class="mb-4 text-center">Wikilite</h1>
 
 <form id="searchForm" class="mb-4" action="?" method="post">
-    <div class="input-group">
-        <input type="text" name="query" class="form-control flex-grow-1" value="{{.Query}}">
-        <input type="number" name="limit" class="form-control text-center" value="{{.Limit}}" size="3" style="width: 8ch; flex: none;">
-        <button type="submit" class="btn btn-secondary"><i class="bi bi-search"></i></button>
-    </div>
+  <div class="input-group">
+    <input type="text" name="query" class="form-control flex-grow-1" value="{{.Query}}">
+    <input type="number" name="limit" class="form-control text-center" value="{{.Limit}}" size="3" style="width: 8ch; flex: none;">
+    <button type="submit" class="btn btn-secondary"><i class="bi bi-search"></i></button>
+  </div>
 </form>
 
 {{if .HasQuery}}
-   {{if len .Results}}
-   <ol class="list-group list-group-numbered">
-     {{range .Results}}
-     <li class="list-group-item d-flex justify-content-between align-items-start">
-       <div class="ms-2 me-auto">
-         <div class="mb-1"><a href="article?id={{.ArticleID}}" class="text-decoration-none">{{.Title}}</a></div>
-         <p>{{.Text}}</p>
-       </div>
-     </li>
-     {{end}}
-   </ol>
-   {{else}}
-     <div class="alert alert-info">No results found for "{{.Query}}"</div>
-   {{end}}
- {{end}}
+  {{if len .Results}}
+  <ol class="list-group list-group-numbered">
+    {{range .Results}}
+    <li class="list-group-item d-flex justify-content-between align-items-start">
+      <div class="ms-2 me-auto">
+        <div class="mb-1"><a href="article?id={{.ArticleID}}" class="text-decoration-none">{{.Title}}</a></div>
+        <p>
+        {{if .Snippet}}
+          {{.Snippet |  safeHTML}}
+        {{else}}
+          {{.Text}}
+        {{end}}
+        </p>
+      </div>
+    </li>
+    {{end}}
+  </ol>
+  {{else}}
+    <div class="alert alert-info">No results found for "{{.Query}}"</div>
+  {{end}}
+{{end}}
 
 <script>
-  if (/Chrome/.test(navigator.userAgent) && 'speechSynthesis' in window && 'webkitSpeechRecognition' in window) {
-		document.body.innerHTML += `<div class="position-fixed top-0 end-0"><a href="/static/?language={{.Language}}&ai={{.AI}}" class="btn"><i class="bi bi-universal-access-circle fs-4"></i></a></div>`;
-	}
+  const div = document.createElement('div');
+  div.className = 'position-fixed top-0 end-0';
+
+  const anchor = document.createElement('a');
+  anchor.href = "/static/?language={{.Language}}&ai={{.AI}}";
+  anchor.className = "btn";
+
+  const icon = document.createElement('i');
+  icon.className = "bi bi-diagram-3 fs-4";
+
+  anchor.appendChild(icon);
+  div.appendChild(anchor);
+  document.body.appendChild(div);
 </script>
 
 {{template "foot.html" . }}

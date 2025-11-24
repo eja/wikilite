@@ -33,7 +33,14 @@ type WebServer struct {
 }
 
 func NewWebServer() (*WebServer, error) {
-	tmpl, err := template.ParseFS(assets, "assets/templates/*")
+	tmpl := template.New("").Funcs(template.FuncMap{
+		"safeHTML": func(s string) template.HTML {
+			return template.HTML(s)
+		},
+	})
+
+	var err error
+	tmpl, err = tmpl.ParseFS(assets, "assets/templates/*")
 	if err != nil {
 		return nil, fmt.Errorf("error parsing templates: %v", err)
 	}
@@ -171,7 +178,6 @@ func (s *WebServer) handleGenericAPISearch(w http.ResponseWriter, r *http.Reques
 		Results: &results,
 		Time:    time.Since(startTime).Seconds(),
 	})
-
 }
 
 func (s *WebServer) handleAPISearch(w http.ResponseWriter, r *http.Request) {
