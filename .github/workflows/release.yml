@@ -10,7 +10,7 @@ jobs:
     runs-on: macos-15-intel
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -270,7 +270,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Setup ARM32 JNI library
         run: |
@@ -285,9 +285,10 @@ jobs:
           mv android/app/src/main/jniLibs/arm64-v8a/wikilite android/app/src/main/jniLibs/arm64-v8a/libwikilite.so 
 
       - name: Set up JDK
-        uses: actions/setup-java@v1
+        uses: actions/setup-java@v5
         with:
           java-version: '17'
+          distribution: 'temurin'
 
       - name: Build AAB
         run: |
