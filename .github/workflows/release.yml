@@ -296,7 +296,7 @@ jobs:
 
       - name: Sign AAB
         id: sign_app_aab
-        uses: r0adkll/sign-android-release@v1
+        uses: kevin-david/zipalign-sign-android-release@v2
         with:
           releaseDirectory: android/app/build/outputs/bundle/release
           signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE }}
@@ -316,7 +316,7 @@ jobs:
 
       - name: Sign APK
         id: sign_app_apk
-        uses: r0adkll/sign-android-release@v1
+        uses: kevin-david/zipalign-sign-android-release@v2
         with:
           releaseDirectory: android/app/build/outputs/apk/release
           signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE }}
