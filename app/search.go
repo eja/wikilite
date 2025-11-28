@@ -20,11 +20,14 @@ func Search(query string, limit int) ([]SearchResult, error) {
 	}
 	results = append(results, lexical...)
 
-	semantic, err := SearchSemantic(query, limit)
-	if err != nil {
-		return nil, err
+	if len(lexical) <= limit {
+
+		semantic, err := SearchSemantic(query, limit)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, semantic...)
 	}
-	results = append(results, semantic...)
 
 	return searchOptimize(results, limit), nil
 }
@@ -103,12 +106,16 @@ func SearchCli() error {
 					log.Fatal("CLI error: ", err)
 				}
 
-				fmt.Printf("%s\n\n", article.Title)
-
+				fmt.Printf("\033[1;30m\n%s\n\033[0m", article.Title)
 				for _, section := range article.Sections {
-					fmt.Printf("%s\n\n", section.Title)
-					fmt.Println()
+					if section.Title != "" {
+						fmt.Printf("\033[1;30m\n%s\n\033[0m\n", section.Title)
+					} else {
+						fmt.Println()
+					}
+					fmt.Println(section.Content)
 				}
+
 				query = ""
 			}
 		}
