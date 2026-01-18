@@ -1,25 +1,18 @@
+// Copyright (C) by Ubaldo Porcheddu <ubaldo@eja.it>
+
 package it.eja.wikilite
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.SharedPreferences
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ProgressBar
-import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
@@ -29,25 +22,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var preferences: SharedPreferences
     private val WIKILITE_LIBRARY_NAME = "libwikilite.so"
     private val DB_FILENAME = "wikilite.db"
-    private val PERMISSION_REQUEST_CODE = 100
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
-        if (hasExternalSdCard()) {
-            if (!checkStoragePermissions()) {
-                return
-            }
-        }
-
         initializeAppLogic()
-    }
-
-    private fun hasExternalSdCard(): Boolean {
-        val dirs = getExternalFilesDirs(null)
-        return dirs.size > 1
     }
 
     private fun initializeAppLogic() {
@@ -69,77 +49,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun checkStoragePermissions(): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                try {
-                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                    intent.addCategory("android.intent.category.DEFAULT")
-                    intent.data = Uri.parse(String.format("package:%s", applicationContext.packageName))
-                    startActivityForResult(intent, PERMISSION_REQUEST_CODE)
-                } catch (e: Exception) {
-                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                    startActivityForResult(intent, PERMISSION_REQUEST_CODE)
-                }
-                return false
-            }
-        } else {
-            val permissions = arrayOf(
-                Manifest.permission.READ_EXTERNAL_STORAGE,
-                Manifest.permission.WRITE_EXTERNAL_STORAGE
-            )
-            val missingPermissions = permissions.filter {
-                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-            }
-            if (missingPermissions.isNotEmpty()) {
-                ActivityCompat.requestPermissions(this, missingPermissions.toTypedArray(), PERMISSION_REQUEST_CODE)
-                return false
-            }
-        }
-        return true
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                if (Environment.isExternalStorageManager()) {
-                    initializeAppLogic()
-                } else {
-                    Toast.makeText(this, "Storage permission is required to check the SD card.", Toast.LENGTH_LONG).show()
-                    initializeAppLogic()
-                }
-            }
-        }
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                initializeAppLogic()
-            } else {
-                Toast.makeText(this, "Storage permission is required to check the SD card.", Toast.LENGTH_LONG).show()
-                initializeAppLogic()
-            }
-        }
-    }
-
     private fun discoverDatabase(): File? {
         val externalDirs = getExternalFilesDirs(null)
         for (dir in externalDirs) {
-            if (dir != null && dir != filesDir) {
-                val pathStr = dir.absolutePath
-                val rootPath = if (pathStr.contains("/Android")) {
-                    pathStr.substringBefore("/Android")
-                } else {
-                    pathStr
-                }
-
-                val externalRootFile = File(rootPath, DB_FILENAME)
-                if (externalRootFile.exists()) {
-                    return externalRootFile
+            if (dir != null) {
+                val dbFile = File(dir, DB_FILENAME)
+                if (dbFile.exists()) {
+                    return dbFile
                 }
             }
         }

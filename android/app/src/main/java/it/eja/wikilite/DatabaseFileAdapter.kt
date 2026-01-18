@@ -1,3 +1,5 @@
+// Copyright (C) by Ubaldo Porcheddu <ubaldo@eja.it>
+
 package it.eja.wikilite
 
 import android.view.LayoutInflater

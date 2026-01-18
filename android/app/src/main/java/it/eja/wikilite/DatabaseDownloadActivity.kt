@@ -1,3 +1,5 @@
+// Copyright (C) by Ubaldo Porcheddu <ubaldo@eja.it>
+
 package it.eja.wikilite
 
 import android.app.ProgressDialog
@@ -5,7 +7,9 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.AsyncTask
 import android.os.Bundle
+import android.os.Environment
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import kotlinx.coroutines.*
@@ -35,6 +39,16 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         loadDatabaseFiles()
     }
 
+    private fun getRemovableStoragePath(): String? {
+        val dirs = getExternalFilesDirs(null)
+        for (dir in dirs) {
+            if (dir != null && Environment.isExternalStorageRemovable(dir)) {
+                return dir.absolutePath
+            }
+        }
+        return null
+    }
+
     private fun goToMainActivity() {
         startActivity(Intent(this, MainActivity::class.java))
         finish()
@@ -45,9 +59,30 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         recyclerView.layoutManager = LinearLayoutManager(this)
 
         adapter = DatabaseFileAdapter(databaseFiles) { filePath ->
-            startDownload(filePath, filesDir.absolutePath)
+            handleDownloadRequest(filePath)
         }
         recyclerView.adapter = adapter
+    }
+
+    private fun handleDownloadRequest(filePath: String) {
+        val sdCardPath = getRemovableStoragePath()
+        val internalPath = filesDir.absolutePath
+
+        if (sdCardPath != null) {
+            AlertDialog.Builder(this)
+                .setTitle("Select Storage")
+                .setMessage("Where would you like to save the database?")
+                .setPositiveButton("External") { _, _ ->
+                    startDownload(filePath, sdCardPath)
+                }
+                .setNegativeButton("Internal") { _, _ ->
+                    startDownload(filePath, internalPath)
+                }
+                .setNeutralButton("Cancel", null)
+                .show()
+        } else {
+            startDownload(filePath, internalPath)
+        }
     }
 
     private fun loadDatabaseFiles() {
@@ -132,7 +167,13 @@ class DatabaseDownloadActivity : AppCompatActivity() {
 
                 val fileLength = connection.contentLength.toLong()
 
-                val outputFile = File(downloadPath, DB_FILENAME)
+                // Create the directory if it doesn't exist
+                val dir = File(downloadPath)
+                if (!dir.exists()) {
+                    dir.mkdirs()
+                }
+
+                val outputFile = File(dir, DB_FILENAME)
                 finalDbPath = outputFile.absolutePath
 
                 val inputStream = connection.getInputStream()
