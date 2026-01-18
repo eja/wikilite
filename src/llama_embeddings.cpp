@@ -11,6 +11,9 @@
 static common_params g_params;
 static llama_model* g_model = nullptr;
 static llama_context* g_ctx = nullptr;
+
+static common_init_result_ptr g_init_result = nullptr;
+
 static bool g_initialized = false;
 static void* g_copied_buffer = nullptr;
 static size_t g_copied_size = 0;
@@ -83,21 +86,28 @@ int llama_embeddings_init(const char* model_path, int n_threads) {
     temp_params.n_gpu_layers = 0;
     temp_params.use_mmap = false;
 
-    common_init_result llama_init = common_init_from_params(temp_params);
-    llama_model* temp_model = llama_init.model.release();
+    auto llama_init = common_init_from_params(temp_params);
     
-    if (temp_model == nullptr) {
+    if (!llama_init) {
         llama_log_set(NULL, NULL);
         fprintf(stderr, "Error: Failed to initialize model from '%s' (pass 1)\n", model_path);
         return 1;
     }
 
-    if (llama_init.context) {
-        llama_free(llama_init.context.release());
+    llama_model* temp_model = llama_init->model();
+    
+    if (temp_model == nullptr) {
+        llama_log_set(NULL, NULL);
+        fprintf(stderr, "Error: Failed to obtain model pointer (pass 1)\n");
+        return 1;
     }
+
+    llama_init->free_context(); 
 
     const int model_ctx_size = llama_model_n_ctx_train(temp_model);
     
+    llama_init.reset(); 
+
     common_params final_params = {};
     final_params.model.path = model_path;
     final_params.embedding = true;
@@ -113,21 +123,24 @@ int llama_embeddings_init(const char* model_path, int n_threads) {
     final_params.n_gpu_layers = 0;
     final_params.use_mmap = false;
 
-    llama_model_free(temp_model);
+    auto llama_init_final = common_init_from_params(final_params);
+    
+    if (!llama_init_final) {
+        llama_log_set(NULL, NULL);
+        fprintf(stderr, "Error: Failed to initialize model or context from '%s' (pass 2)\n", model_path);
+        return 1;
+    }
 
-    common_init_result llama_init_final = common_init_from_params(final_params);
-    g_model = llama_init_final.model.release();
-    g_ctx = llama_init_final.context.release();
+    g_model = llama_init_final->model();
+    g_ctx = llama_init_final->context();
 
     if (g_model == nullptr || g_ctx == nullptr) {
         llama_log_set(NULL, NULL);
-        fprintf(stderr, "Error: Failed to initialize model or context from '%s' (pass 2)\n", model_path);
-        if (g_model) llama_model_free(g_model);
-        if (g_ctx) llama_free(g_ctx);
-        g_model = nullptr;
-        g_ctx = nullptr;
+        fprintf(stderr, "Error: Failed to get model or context pointers (pass 2)\n");
         return 1;
     }
+
+    g_init_result = std::move(llama_init_final);
 
     g_params = final_params;
     g_initialized = true;
@@ -216,11 +229,12 @@ void llama_embeddings_free_output(float* output) {
 
 void llama_embeddings_free(void) {
     if (g_initialized) {
-        if (g_ctx) llama_free(g_ctx);
-        if (g_model) llama_model_free(g_model);
-        llama_backend_free();
+        g_init_result.reset(); 
+        
         g_model = NULL;
         g_ctx = NULL;
+        
+        llama_backend_free();
         g_initialized = false;
     }
 }

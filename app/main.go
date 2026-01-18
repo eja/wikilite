@@ -12,7 +12,7 @@ import (
 )
 
 const Name = "wikilite"
-const Version = "0.27.5" //termux
+const Version = "1.1.18" //termux
 
 type Config struct {
 	aiAnn               bool

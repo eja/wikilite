@@ -12,12 +12,13 @@ index 86f1c31af..1072c0b96 100644
      FILE * file = NULL;
  
      // convert fname (UTF-8)
-@@ -577,11 +577,33 @@ FILE * ggml_fopen(const char * fname, const char * mode) {
+@@ -577,11 +577,34 @@ FILE * ggml_fopen(const char * fname, const char * mode) {
      }
  
      return file;
 +}
  #else
++#include <stdint.h>
 +typedef struct {
 +    const void * buf;
 +    size_t       size;
@@ -33,7 +34,7 @@ index 86f1c31af..1072c0b96 100644
 +FILE * ggml_fopen(const char * fname, const char * mode) {
 +    const char * memory_magic_prefix = "memory:";
 +    if (g_memory_file.buf != NULL && strncmp(fname, memory_magic_prefix, strlen(memory_magic_prefix)) == 0) {
-+        FILE* result = fmemopen((void *)g_memory_file.buf, g_memory_file.size, mode);
++        FILE* result = fmemopen((void *)(uintptr_t)g_memory_file.buf, g_memory_file.size, mode);
 +        if (result == NULL) {
 +            printf("fmemopen failed: %s\n", strerror(errno));
 +        }
