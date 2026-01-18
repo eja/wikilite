@@ -10,7 +10,7 @@ android {
     defaultConfig {
         applicationId = "it.eja.wikilite"
         minSdk = 21
-        targetSdk = 33
+        targetSdk = 35
         versionCode = 1
         versionName = "1.1.18"
     }
