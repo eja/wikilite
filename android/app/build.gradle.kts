@@ -11,7 +11,7 @@ android {
         applicationId = "it.eja.wikilite"
         minSdk = 21
         targetSdk = 35
-        versionCode = 1
+        versionCode = 2
         versionName = "1.1.18"
     }
 
