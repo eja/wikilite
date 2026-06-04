@@ -14,7 +14,7 @@ func EuclideanDistance(a, b []float32) (float32, error) {
 	}
 
 	var sum float32
-	for i := 0; i < len(a); i++ {
+	for i := range a {
 		diff := a[i] - b[i]
 		sum += diff * diff
 	}
@@ -28,7 +28,7 @@ func HammingDistance(a, b []byte) (float32, error) {
 	}
 
 	diffCount := 0
-	for i := 0; i < len(a); i++ {
+	for i := range a {
 		diffBits := a[i] ^ b[i]
 		diffCount += bits.OnesCount8(diffBits)
 	}
@@ -57,13 +57,16 @@ func LevenshteinDistance(s1, s2 string) int {
 			if r1[i-1] == r2[j-1] {
 				dp[i][j] = dp[i-1][j-1]
 			} else {
-				dp[i][j] = dp[i-1][j] + 1    // Deletion.
-				if dp[i][j-1]+1 < dp[i][j] { // Insertion.
-					dp[i][j] = dp[i][j-1] + 1
-				}
-				if dp[i-1][j-1]+1 < dp[i][j] { // Substitution.
-					dp[i][j] = dp[i-1][j-1] + 1
-				}
+				dp[i][j] = min(
+					// Deletion.
+					// Insertion.
+					dp[i-1][j-1]+1,
+					// Substitution.
+					min(
+
+						dp[i][j-1]+1,
+
+						dp[i-1][j]+1))
 			}
 		}
 	}

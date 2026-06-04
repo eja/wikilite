@@ -25,10 +25,10 @@ type ArticleResult struct {
 }
 
 type OutputArticle struct {
-	Title  string                   `json:"title"`
-	Entity string                   `json:"entity"`
-	Items  []map[string]interface{} `json:"items"`
-	ID     int                      `json:"id"`
+	Title  string           `json:"title"`
+	Entity string           `json:"entity"`
+	Items  []map[string]any `json:"items"`
+	ID     int              `json:"id"`
 }
 
 type InputArticle struct {

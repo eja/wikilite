@@ -50,7 +50,7 @@ func NewWebServer() (*WebServer, error) {
 	}, nil
 }
 
-func (s *WebServer) executeTemplate(w http.ResponseWriter, templateName string, data interface{}) {
+func (s *WebServer) executeTemplate(w http.ResponseWriter, templateName string, data any) {
 	err := s.template.ExecuteTemplate(w, templateName, data)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("error executing template: %v", err), http.StatusInternalServerError)

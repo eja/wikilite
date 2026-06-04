@@ -18,7 +18,7 @@ func (h *DBHandler) AiModelImport(path string) error {
 		return fmt.Errorf("failed to read file: %v", err)
 	}
 
-	_, err = h.db.Exec(`INSERT OR REPLACE INTO setup (key, value) VALUES ("gguf", ?)`, data)
+	_, err = h.db.Exec(`INSERT OR REPLACE INTO setup (key, value) VALUES ("model", ?)`, data)
 
 	if err != nil {
 		return fmt.Errorf("failed to import model into database: %v", err)
@@ -30,7 +30,7 @@ func (h *DBHandler) AiModelImport(path string) error {
 func (h *DBHandler) AiModelLoad() []byte {
 	var data []byte
 
-	row := h.db.QueryRow(`SELECT value FROM setup WHERE key = "gguf" LIMIT 1`)
+	row := h.db.QueryRow(`SELECT value FROM setup WHERE key = "model" LIMIT 1`)
 
 	err := row.Scan(&data)
 	if err != nil {

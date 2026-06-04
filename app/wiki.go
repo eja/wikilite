@@ -189,7 +189,7 @@ func wikiCollectTextFromNode(node *html.Node, depth int) string {
 	return textContent
 }
 
-func wikiProcessTextElementWithText(textContent string, lastHeading *string, power *int, groupedItems *[]map[string]interface{}) {
+func wikiProcessTextElementWithText(textContent string, lastHeading *string, power *int, groupedItems *[]map[string]any) {
 	trimmedText := strings.TrimSpace(textContent)
 	if trimmedText == "" {
 		return
@@ -205,7 +205,7 @@ func wikiProcessTextElementWithText(textContent string, lastHeading *string, pow
 	}
 
 	if !found {
-		*groupedItems = append(*groupedItems, map[string]interface{}{
+		*groupedItems = append(*groupedItems, map[string]any{
 			"title": *lastHeading,
 			"pow":   *power,
 			"text":  []string{trimmedText},
@@ -213,7 +213,7 @@ func wikiProcessTextElementWithText(textContent string, lastHeading *string, pow
 	}
 }
 
-func wikiProcessTextElement(node *html.Node, lastHeading *string, power *int, groupedItems *[]map[string]interface{}) {
+func wikiProcessTextElement(node *html.Node, lastHeading *string, power *int, groupedItems *[]map[string]any) {
 	textContent := wikiCollectTextFromNode(node, 0)
 	wikiProcessTextElementWithText(textContent, lastHeading, power, groupedItems)
 }
@@ -228,7 +228,7 @@ func wikiExtractContentFromHTML(htmlContent string, articleID string, articleTit
 	var lastHeading string
 	var power int
 
-	groupedItems := []map[string]interface{}{}
+	groupedItems := []map[string]any{}
 
 	var extractText func(*html.Node)
 	extractText = func(n *html.Node) {
@@ -282,7 +282,7 @@ func wikiExtractContentFromHTML(htmlContent string, articleID string, articleTit
 	}
 	extractText(doc)
 
-	var items []map[string]interface{}
+	var items []map[string]any
 
 	for _, item := range groupedItems {
 		texts := item["text"].([]string)
@@ -296,7 +296,7 @@ func wikiExtractContentFromHTML(htmlContent string, articleID string, articleTit
 			}
 			fullContent := strings.TrimSpace(contentBuilder.String())
 			if fullContent != "" {
-				items = append(items, map[string]interface{}{
+				items = append(items, map[string]any{
 					"title":   item["title"],
 					"pow":     item["pow"],
 					"content": fullContent,
