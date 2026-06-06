@@ -7,13 +7,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"sync"
+)
+
+var (
+	globalTok *bpeTokenizer
+	globalMdl *qwen3Model
+	globalMu  sync.RWMutex
 )
 
 type aiEmbeddingRequest struct {
-	Model          string      `json:"model"`
-	Input          interface{} `json:"input"`
-	EncodingFormat string      `json:"encoding_format,omitempty"`
+	Model          string `json:"model"`
+	Input          any    `json:"input"`
+	EncodingFormat string `json:"encoding_format,omitempty"`
 }
 
 type aiEmbeddingResponse struct {
@@ -34,11 +43,24 @@ type aiEmbeddingResponse struct {
 }
 
 func aiInit() (err error) {
+	if !options.aiApi {
+		if err := localAiInit(options.aiModel); err != nil {
+			return fmt.Errorf("AI error loading local embedding model: %v", err)
+		}
+	}
+
 	if _, err := aiEmbeddings("test"); err != nil {
 		return fmt.Errorf("AI error loading embedding model: %v", err)
 	}
 
 	return nil
+}
+
+func aiEmbeddings(input string) ([]float32, error) {
+	if options.aiApi {
+		return aiApiEmbeddings(input)
+	}
+	return localAiEmbeddings(input)
 }
 
 func aiApiEmbeddings(input string) (output []float32, err error) {
@@ -88,4 +110,72 @@ func aiApiEmbeddings(input string) (output []float32, err error) {
 	}
 
 	return apiResp.Data[0].Embedding, nil
+}
+
+func localAiEnabled() bool {
+	return true
+}
+
+func localAiInit(modelPath string) error {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+
+	var r io.ReadSeeker
+	var closeFn func() error
+
+	if dbData := db.AiModelLoad(); len(dbData) > 0 {
+		r = bytes.NewReader(dbData)
+	} else if modelPath != "" {
+		f, err := os.Open(modelPath)
+		if err != nil {
+			return err
+		}
+		r = f
+		closeFn = f.Close
+	} else {
+		return fmt.Errorf("no model path specified and no model found in database")
+	}
+	if closeFn != nil {
+		defer closeFn()
+	}
+
+	p, err := NewGGUFParser(r)
+	if err != nil {
+		return err
+	}
+
+	tok, err := loadTokenizer(p)
+	if err != nil {
+		return err
+	}
+	mdl, err := loadModel(p)
+	if err != nil {
+		return err
+	}
+	globalTok = tok
+	globalMdl = mdl
+	return nil
+}
+
+func localAiEmbeddings(input string) ([]float32, error) {
+	globalMu.RLock()
+	tok := globalTok
+	mdl := globalMdl
+	globalMu.RUnlock()
+	if tok == nil || mdl == nil {
+		return nil, fmt.Errorf("model not initialized")
+	}
+	ids := tok.encode(input)
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("empty input")
+	}
+	return mdl.embed(ids), nil
+}
+
+func clip(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }

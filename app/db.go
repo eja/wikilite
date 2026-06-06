@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"log"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 type DBHandler struct {
@@ -90,7 +88,7 @@ func (h *DBHandler) initializeDB() error {
 }
 
 func NewDBHandler(dbPath string) (*DBHandler, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := openDB(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("error opening database: %v", err)
 	}

@@ -94,10 +94,7 @@ func (h *DBHandler) ProcessEmbeddings() (err error) {
 	var problematicIDs []int
 
 	for processed < totalCount {
-		end := processed + batchSize
-		if end > totalCount {
-			end = totalCount
-		}
+		end := min(processed+batchSize, totalCount)
 
 		batchIDs := pendingSectionIDs[processed:end]
 		if len(batchIDs) == 0 {
@@ -110,7 +107,7 @@ func (h *DBHandler) ProcessEmbeddings() (err error) {
 		}
 
 		placeholders := make([]string, len(batchIDs))
-		args := make([]interface{}, len(batchIDs))
+		args := make([]any, len(batchIDs))
 		for i, id := range batchIDs {
 			placeholders[i] = "?"
 			args[i] = id
@@ -257,10 +254,7 @@ func (h *DBHandler) ProcessANN() error {
 	processed := 0
 
 	for processed < totalCount {
-		end := processed + batchSize
-		if end > totalCount {
-			end = totalCount
-		}
+		end := min(processed+batchSize, totalCount)
 
 		batchIDs := pendingVectorIDs[processed:end]
 		if len(batchIDs) == 0 {
@@ -273,7 +267,7 @@ func (h *DBHandler) ProcessANN() error {
 		}
 
 		placeholders := make([]string, len(batchIDs))
-		args := make([]interface{}, len(batchIDs))
+		args := make([]any, len(batchIDs))
 		for i, id := range batchIDs {
 			placeholders[i] = "?"
 			args[i] = id

@@ -20,7 +20,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar
     private lateinit var preferences: SharedPreferences
-    private val WIKILITE_LIBRARY_NAME = "libwikilite.so"
     private val DB_FILENAME = "wikilite.db"
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -74,13 +73,9 @@ class MainActivity : AppCompatActivity() {
         handleBackPress()
 
         try {
-            Thread {
-                startWikiLiteProcess(dbPath)
-            }.start()
+            Server.startBinaryServer(this, dbPath)
 
-            webView.postDelayed({
-                webView.loadUrl("http://127.0.0.1:35248/")
-            }, 5000)
+            pollServerAndLoadUrl()
 
         } catch (e: Exception) {
             Log.e("MainActivity", "Failed to setup and run wikilite", e)
@@ -127,69 +122,29 @@ class MainActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, callback)
     }
 
-    private fun startWikiLiteProcess(dbPath: String) {
-        try {
-            val cwd = cacheDir
-            cwd.mkdirs()
-
-            val executablePath = File(applicationInfo.nativeLibraryDir, WIKILITE_LIBRARY_NAME).absolutePath
-            val libraryPath = applicationInfo.nativeLibraryDir
-
-            val command = arrayOf(
-                executablePath,
-                "--db", dbPath,
-                "--web",
-                "--web-port", "35248",
-                "--web-host", "0.0.0.0"
-            )
-
-            Log.d("MainActivity", "Executing command: ${command.joinToString(" ")}")
-
-            val processBuilder = ProcessBuilder(*command)
-                .directory(cwd)
-                .redirectErrorStream(true)
-
-            val env = processBuilder.environment()
-            env["LD_LIBRARY_PATH"] = libraryPath
-            env["HOME"] = cwd.absolutePath
-            env["TMPDIR"] = cwd.absolutePath
-            env["PATH"] = "$libraryPath:${env["PATH"] ?: ""}"
-
-            val process = processBuilder.start()
-
-            Thread {
-                val reader = process.inputStream.bufferedReader()
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    Log.d("wikilite", line ?: "")
-                }
-            }.start()
-
-            Thread.sleep(2000)
-
-            var isAlive = false
-            try {
-                process.exitValue()
-                isAlive = false
-            } catch (e: IllegalThreadStateException) {
-                isAlive = true
+    private fun pollServerAndLoadUrl(attempt: Int = 0) {
+        if (attempt >= 15) { // Timeout after ~7.5 seconds (15 attempts * 500ms)
+            runOnUiThread {
+                webView.loadUrl("http://127.0.0.1:35248/")
             }
-
-            if (isAlive) {
-                Log.d("MainActivity", "wikilite process started successfully")
-                Thread {
-                    try {
-                        process.waitFor()
-                    } catch (e: InterruptedException) {
-                        e.printStackTrace()
-                    }
-                }.start()
-            } else {
-                Log.e("MainActivity", "wikilite process failed to start")
-            }
-
-        } catch (e: Exception) {
-            Log.e("MainActivity", "An exception occurred while starting the subprocess.", e)
+            return
         }
+
+        Server.fetchStatus { isReady ->
+            if (isReady) {
+                runOnUiThread {
+                    webView.loadUrl("http://127.0.0.1:35248/")
+                }
+            } else {
+                webView.postDelayed({
+                    pollServerAndLoadUrl(attempt + 1)
+                }, 500)
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Server.stopBinaryServer()
     }
 }
