@@ -7,8 +7,8 @@ all: lint app
 
 clean:
 	@rm -rf $(BUILD_DIR)
-	@rm android/app/src/main/jniLibs/arm64-v8a/lib$(APP).so
-	@rm android/app/src/main/jniLibs/armeabi-v7a/lib$(APP).so
+	@rm -f android/app/src/main/jniLibs/arm64-v8a/lib$(APP).so
+	@rm -f android/app/src/main/jniLibs/armeabi-v7a/lib$(APP).so
 
 lint:
 	@gofmt -w ./app

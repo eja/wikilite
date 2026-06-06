@@ -5,7 +5,6 @@ package it.eja.wikilite
 import android.app.ProgressDialog
 import android.content.Intent
 import android.content.SharedPreferences
-import android.os.AsyncTask
 import android.os.Bundle
 import android.os.Environment
 import android.widget.Toast
@@ -17,6 +16,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.*
+import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.GZIPInputStream
 
@@ -29,6 +29,9 @@ class DatabaseDownloadActivity : AppCompatActivity() {
     private var progressDialog: ProgressDialog? = null
     private val DB_FILENAME = "wikilite.db"
 
+    private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var lastProgressUpdateTime = 0L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_database_download)
@@ -37,6 +40,12 @@ class DatabaseDownloadActivity : AppCompatActivity() {
 
         setupUI()
         loadDatabaseFiles()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        activityScope.cancel()
+        progressDialog?.dismiss()
     }
 
     private fun getRemovableStoragePath(): String? {
@@ -86,7 +95,7 @@ class DatabaseDownloadActivity : AppCompatActivity() {
     }
 
     private fun loadDatabaseFiles() {
-        CoroutineScope(Dispatchers.Main).launch {
+        activityScope.launch {
             progressDialog = ProgressDialog(this@DatabaseDownloadActivity).apply {
                 setMessage("Loading database files...")
                 setCancelable(false)
@@ -97,10 +106,12 @@ class DatabaseDownloadActivity : AppCompatActivity() {
                 loadFilesFromHuggingFace()
             }
 
-            progressDialog?.dismiss()
-            databaseFiles.clear()
-            databaseFiles.addAll(files)
-            adapter.notifyDataSetChanged()
+            if (!isFinishing && !isDestroyed) {
+                progressDialog?.dismiss()
+                databaseFiles.clear()
+                databaseFiles.addAll(files)
+                adapter.notifyDataSetChanged()
+            }
         }
     }
 
@@ -123,7 +134,7 @@ class DatabaseDownloadActivity : AppCompatActivity() {
                     val item = siblings.getJSONObject(i)
                     val rfilename = item.getString("rfilename")
 
-                    if (rfilename.endsWith(".db.gz")) {
+                    if (rfilename.endsWith(".db.gz") && rfilename.startsWith("lexical")) {
                         files.add(rfilename)
                     }
                 }
@@ -135,106 +146,143 @@ class DatabaseDownloadActivity : AppCompatActivity() {
     }
 
     private fun startDownload(filePath: String, downloadPath: String) {
-        DownloadAndExtractTask().execute(filePath to downloadPath)
+        activityScope.launch {
+            showProgressPreparing()
+
+            val success = downloadAndExtract(filePath, downloadPath)
+
+            if (!isFinishing && !isDestroyed) {
+                progressDialog?.dismiss()
+                if (success) {
+                    val finalDbPath = File(downloadPath, DB_FILENAME).absolutePath
+                    preferences.edit().putString("db_path", finalDbPath).apply()
+                    Toast.makeText(this@DatabaseDownloadActivity, "Download successful!", Toast.LENGTH_SHORT).show()
+                    goToMainActivity()
+                } else {
+                    Toast.makeText(this@DatabaseDownloadActivity, "Download failed!", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
-    private inner class DownloadAndExtractTask : AsyncTask<Pair<String, String>, Long, Boolean>() {
-        private lateinit var currentFilePath: String
-        private lateinit var finalDbPath: String
-        private lateinit var downloadPath: String
+    private fun showProgressPreparing() {
+        progressDialog?.dismiss()
+        progressDialog = ProgressDialog(this@DatabaseDownloadActivity).apply {
+            setMessage("Preparing download...")
+            setCancelable(false)
+            setProgressStyle(ProgressDialog.STYLE_HORIZONTAL)
+            isIndeterminate = false
+            show()
+        }
+    }
 
-        override fun onPreExecute() {
-            super.onPreExecute()
-            progressDialog = ProgressDialog(this@DatabaseDownloadActivity).apply {
-                setMessage("Preparing download...")
-                setCancelable(false)
-                setProgressStyle(ProgressDialog.STYLE_HORIZONTAL)
-                isIndeterminate = false
-                show()
+    private suspend fun downloadAndExtract(currentFilePath: String, downloadPath: String): Boolean = withContext(Dispatchers.IO) {
+        val tempFile = File(downloadPath, "$DB_FILENAME.tmp")
+        val finalFile = File(downloadPath, DB_FILENAME)
+
+        val dir = File(downloadPath)
+        if (!dir.exists()) {
+            dir.mkdirs()
+        }
+
+        if (tempFile.exists()) {
+            tempFile.delete()
+        }
+
+        var success = false
+        var connection: HttpURLConnection? = null
+
+        try {
+            val url = URL("https://huggingface.co/datasets/eja/wikilite/resolve/main/$currentFilePath")
+            connection = url.openConnection() as HttpURLConnection
+            connection.connectTimeout = 15000
+            connection.readTimeout = 15000
+            connection.connect()
+
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                return@withContext false
+            }
+
+            val fileLength = connection.contentLength.toLong()
+            val inputStream = connection.inputStream
+            var totalExtractedBytes = 0L
+            var bytesDownloaded = 0L
+
+            val countingInputStream = object : FilterInputStream(inputStream) {
+                override fun read(): Int {
+                    val b = super.read()
+                    if (b != -1) {
+                        bytesDownloaded++
+                        updateProgressOnMain(bytesDownloaded, fileLength, totalExtractedBytes)
+                    }
+                    return b
+                }
+
+                override fun read(b: ByteArray, off: Int, len: Int): Int {
+                    val result = super.read(b, off, len)
+                    if (result != -1) {
+                        bytesDownloaded += result
+                        updateProgressOnMain(bytesDownloaded, fileLength, totalExtractedBytes)
+                    }
+                    return result
+                }
+            }
+
+            FileOutputStream(tempFile).use { fos ->
+                GZIPInputStream(countingInputStream).use { gis ->
+                    val buffer = ByteArray(65536)
+                    var bytesRead: Int
+                    while (gis.read(buffer).also { bytesRead = it } != -1) {
+                        ensureActive()
+                        fos.write(buffer, 0, bytesRead)
+                        totalExtractedBytes += bytesRead
+                    }
+                }
+            }
+
+            if (tempFile.exists() && tempFile.length() > 0) {
+                if (finalFile.exists()) {
+                    finalFile.delete()
+                }
+                if (tempFile.renameTo(finalFile)) {
+                    success = true
+                }
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            connection?.disconnect()
+            if (!success && tempFile.exists()) {
+                tempFile.delete()
             }
         }
 
-        override fun doInBackground(vararg params: Pair<String, String>): Boolean {
-            if (params.isEmpty()) return false
+        return@withContext success
+    }
 
-            currentFilePath = params[0].first
-            downloadPath = params[0].second
-
-            return try {
-                val url = URL("https://huggingface.co/datasets/eja/wikilite/resolve/main/$currentFilePath")
-                val connection = url.openConnection()
-                connection.connect()
-
-                val fileLength = connection.contentLength.toLong()
-
-                // Create the directory if it doesn't exist
-                val dir = File(downloadPath)
-                if (!dir.exists()) {
-                    dir.mkdirs()
-                }
-
-                val outputFile = File(dir, DB_FILENAME)
-                finalDbPath = outputFile.absolutePath
-
-                val inputStream = connection.getInputStream()
-                var totalExtractedBytes = 0L
-
-                val countingInputStream = object : FilterInputStream(inputStream) {
-                    var bytesDownloaded = 0L
-                    override fun read(b: ByteArray, off: Int, len: Int): Int {
-                        val result = super.read(b, off, len)
-                        if (result != -1) {
-                            bytesDownloaded += result
-                            publishProgress(bytesDownloaded, fileLength, totalExtractedBytes)
-                        }
-                        return result
-                    }
-                }
-
-                FileOutputStream(outputFile).use { fos ->
-                    GZIPInputStream(countingInputStream).use { gis ->
-                        val buffer = ByteArray(8192)
-                        var bytesRead: Int
-                        while (gis.read(buffer).also { bytesRead = it } != -1) {
-                            fos.write(buffer, 0, bytesRead)
-                            totalExtractedBytes += bytesRead
-                        }
-                    }
-                }
-                true
-
-            } catch (e: Exception) {
-                e.printStackTrace()
-                false
-            }
+    private fun updateProgressOnMain(downloaded: Long, totalDownload: Long, extracted: Long) {
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastProgressUpdateTime < 300 && downloaded != totalDownload) {
+            return
         }
+        lastProgressUpdateTime = currentTime
 
-        override fun onProgressUpdate(vararg values: Long?) {
-            super.onProgressUpdate(*values)
-            val downloaded = values[0] ?: 0L
-            val totalDownload = values[1] ?: -1L
-            val extracted = values[2] ?: 0L
-
+        runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
             val extractedMB = extracted / (1024 * 1024)
 
             if (totalDownload > 0) {
-                progressDialog?.max = totalDownload.toInt()
-                progressDialog?.progress = downloaded.toInt()
+                if (totalDownload > Int.MAX_VALUE) {
+                    progressDialog?.max = (totalDownload / 1024).toInt()
+                    progressDialog?.progress = (downloaded / 1024).toInt()
+                } else {
+                    progressDialog?.max = totalDownload.toInt()
+                    progressDialog?.progress = downloaded.toInt()
+                }
                 progressDialog?.setMessage("Downloading...")
             } else {
                 progressDialog?.setMessage("Extracted: ${extractedMB}MB")
-            }
-        }
-
-        override fun onPostExecute(success: Boolean) {
-            progressDialog?.dismiss()
-
-            if (success) {
-                preferences.edit().putString("db_path", finalDbPath).apply()
-                Toast.makeText(this@DatabaseDownloadActivity, "Download successful!", Toast.LENGTH_SHORT).show()
-                goToMainActivity()
-            } else {
-                Toast.makeText(this@DatabaseDownloadActivity, "Download failed!", Toast.LENGTH_LONG).show()
             }
         }
     }
