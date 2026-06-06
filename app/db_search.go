@@ -243,7 +243,6 @@ func (h *DBHandler) SearchVectors(query string, limit int) ([]SearchResult, erro
 				topResults = append(topResults, VectorDistance{ID: id, Distance: float32(0)})
 			}
 		}
-
 	}
 
 	if hasVectors {
@@ -259,28 +258,29 @@ func (h *DBHandler) SearchVectors(query string, limit int) ([]SearchResult, erro
 				return nil, err
 			}
 			embedding := BytesToFloat32(embeddingBlob)
-			distance, err := EuclideanDistance(queryEmbedding, embedding)
-			if err != nil {
-				return nil, err
-			}
+			similarity := dot(queryEmbedding, embedding)
 
-			if len(topResults) <= limit {
-				topResults = append(topResults, VectorDistance{ID: ID, Distance: float32(distance)})
+			if len(topResults) < limit {
+				topResults = append(topResults, VectorDistance{ID: ID, Distance: similarity})
 			} else {
-				maxIndex := -1
-				maxDistance := float32(-1)
+				minIndex := -1
+				minSimilarity := float32(2.0)
 				for i := range topResults {
-					if topResults[i].Distance > maxDistance {
-						maxDistance = topResults[i].Distance
-						maxIndex = i
+					if topResults[i].Distance < minSimilarity {
+						minSimilarity = topResults[i].Distance
+						minIndex = i
 					}
 				}
-				if maxIndex >= 0 && float32(distance) < maxDistance {
-					topResults[maxIndex] = VectorDistance{ID: ID, Distance: float32(distance)}
+				if minIndex >= 0 && similarity > minSimilarity {
+					topResults[minIndex] = VectorDistance{ID: ID, Distance: similarity}
 				}
 			}
 		}
 	}
+
+	sort.Slice(topResults, func(i, j int) bool {
+		return topResults[i].Distance > topResults[j].Distance
+	})
 
 	var results []SearchResult
 	for _, vd := range topResults {
@@ -328,6 +328,21 @@ func (h *DBHandler) SearchAnn(vectors []float32, mode string, size int, limit in
 		return nil, fmt.Errorf("invalid ANN mode")
 	}
 
+	var quantizedQuery []byte
+	if mode == "binary" {
+		quantizedQuery = QuantizeBinary(vectors)
+	}
+
+	var mrlQuery []float32
+	if mode == "mrl" {
+		mrlQuery = make([]float32, len(vectors))
+		copy(mrlQuery, vectors)
+		if len(mrlQuery) > size {
+			mrlQuery = mrlQuery[:size]
+		}
+		l2Norm(mrlQuery)
+	}
+
 	rows, err := h.db.Query("SELECT id, chunk FROM vectors_ann_chunks")
 	if err != nil {
 		return nil, err
@@ -349,40 +364,46 @@ func (h *DBHandler) SearchAnn(vectors []float32, mode string, size int, limit in
 
 			var distance float32
 			if mode == "mrl" {
-				mrlQuery := vectors
-				if len(mrlQuery) > size {
-					mrlQuery = mrlQuery[:size]
-				}
-
 				storedMRL := BytesToFloat32(embeddingBlob)
-				distance, err = EuclideanDistance(mrlQuery, storedMRL)
+				distance = dot(mrlQuery, storedMRL)
 			}
-			if options.aiAnnMode == "binary" {
-				quantizedQuery := QuantizeBinary(vectors)
-				distance, err = HammingDistance(quantizedQuery, embeddingBlob)
+			if mode == "binary" {
+				hammingDist, err := HammingDistance(quantizedQuery, embeddingBlob)
+				if err != nil {
+					return nil, err
+				}
+				distance = float32(len(quantizedQuery)*8) - hammingDist
 			}
 
 			result.ChunkRowID = chunkRowID
 			result.ChunkPosition = position / chunkSize
 			result.Distance = distance
 
-			if len(topAnnResults) <= limit {
+			if len(topAnnResults) < limit {
 				topAnnResults = append(topAnnResults, result)
 			} else {
-				maxIndex := -1
-				maxDistance := float32(-1)
+				minIndex := -1
+				minDistance := float32(2.0)
+				if mode == "binary" {
+					minDistance = float32(len(quantizedQuery) * 8)
+				}
 				for i := range topAnnResults {
-					if topAnnResults[i].Distance > maxDistance {
-						maxDistance = topAnnResults[i].Distance
-						maxIndex = i
+					if topAnnResults[i].Distance < minDistance {
+						minDistance = topAnnResults[i].Distance
+						minIndex = i
 					}
 				}
-				if maxIndex >= 0 && distance < maxDistance {
-					topAnnResults[maxIndex] = result
+				if minIndex >= 0 && distance > minDistance {
+					topAnnResults[minIndex] = result
 				}
 			}
 		}
 	}
+
+	sort.Slice(topAnnResults, func(i, j int) bool {
+		return topAnnResults[i].Distance > topAnnResults[j].Distance
+	})
+
 	log.Printf("Search ANN time: %v", time.Since(start))
 	return topAnnResults, nil
 }

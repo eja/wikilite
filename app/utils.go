@@ -186,11 +186,13 @@ func ExtractMRL(embedding []float32, size int) []byte {
 		size = len(embedding)
 	}
 
-	normalized := NormalizeVectors([][]float32{embedding})[0]
+	truncated := make([]float32, size)
+	copy(truncated, embedding[:size])
+	l2Norm(truncated)
 
 	result := make([]byte, size*4)
 	for i := 0; i < size; i++ {
-		bits := math.Float32bits(normalized[i])
+		bits := math.Float32bits(truncated[i])
 		binary.LittleEndian.PutUint32(result[i*4:(i+1)*4], bits)
 	}
 

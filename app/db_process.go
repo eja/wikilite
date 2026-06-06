@@ -313,7 +313,10 @@ func (h *DBHandler) ProcessANN() error {
 
 			var annData []byte
 			if method == "mrl" {
-				annData = ExtractMRL(embedding, size)
+				truncated := make([]float32, size)
+				copy(truncated, embedding[:size])
+				l2Norm(truncated)
+				annData = Float32ToBytes(truncated)
 			} else if method == "binary" {
 				annData = QuantizeBinary(embedding)
 			}
