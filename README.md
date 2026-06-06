@@ -7,7 +7,7 @@ Wikilite is a self-contained tool for creating a local SQLite database of Wikipe
 * **Lexical Search**: Utilizes FTS5 for efficient keyword-based searching within the SQLite database, ideal for exact word and phrase matching.
 * **Optional Semantic Search**: Implements ANN quantization and MRL (Matryoshka Representation Learning) with text embeddings to find semantically similar content, effectively handling misspellings, morphological variations, and synonymy.
 * **Flexible Embedding Options**: Supports native Qwen3 embedding generation directly in pure Go. Alternatively, can delegate embedding generation to external OpenAI-compatible APIs.
-* **Cross-Platform & Android**: Available for Linux, macOS, Windows, Android, and as a native Android application.
+* **Cross-Platform**: Available for Linux, macOS, Windows, and as a native Android application.
 * **Minimal Deployment**: Requires only the Wikilite executable and the database file on POSIX platforms.
 * **Offline Operation**: Complete functionality without internet connectivity.
 * **Dual Interfaces**: Command-line interface for terminal usage and web interface for browser-based access.
@@ -21,7 +21,7 @@ Wikilite is a self-contained tool for creating a local SQLite database of Wikipe
 * Check the available options: `./build/bin/wikilite --help`
 
 ### Pre-built Binaries & Android App
-Pre-compiled binaries for Linux, macOS, Windows, and Android are available in the [latest release](https://github.com/eja/wikilite/releases/latest).
+Pre-compiled binaries for Linux, macOS, and Windows are available in the [latest release](https://github.com/eja/wikilite/releases/latest).
 
 A native [Android application](https://github.com/eja/wikilite/releases/latest/download/wikilite-android.apk) is also available in the releases.
 *   **External Storage Support**: If a `wikilite.db` file is already present in the external SD card, the Android app will detect and use it directly.
