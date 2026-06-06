@@ -6,7 +6,7 @@ Wikilite is a self-contained tool for creating a local SQLite database of Wikipe
 
 * **Lexical Search**: Utilizes FTS5 for efficient keyword-based searching within the SQLite database, ideal for exact word and phrase matching.
 * **Optional Semantic Search**: Implements ANN quantization and MRL (Matryoshka Representation Learning) with text embeddings to find semantically similar content, effectively handling misspellings, morphological variations, and synonymy.
-* **Complete llama.cpp Integration**: Full AI engine embedded directly into Wikilite with GGUF models contained within database files.
+* **Flexible Embedding Options**: Supports native Qwen3 embedding generation directly in pure Go. Alternatively, can delegate embedding generation to external OpenAI-compatible APIs.
 * **Cross-Platform & Android**: Available for Linux, macOS, Windows, Termux, and as a native Android application.
 * **Minimal Deployment**: Requires only the Wikilite executable and the database file on POSIX platforms.
 * **Offline Operation**: Complete functionality without internet connectivity.
@@ -16,7 +16,7 @@ Wikilite is a self-contained tool for creating a local SQLite database of Wikipe
 ## Installation
 
 ### Source Compilation
-* Clone the repository: `git clone --recursive https://github.com/eja/wikilite.git`
+* Clone the repository: `git clone https://github.com/eja/wikilite.git`
 * Build the binary: `make`
 * Check the available options: `./build/bin/wikilite --help`
 
@@ -63,7 +63,7 @@ All search endpoints support pagination via the `limit` parameter and return con
 
 ## Semantic Search Implementation
 
-The semantic search functionality employs text embeddings with GGUF models embedded directly in the database. This approach identifies content with similar semantic meaning rather than relying solely on lexical matching, providing enhanced search capabilities for:
+The semantic search functionality identifies content with similar semantic meaning rather than relying solely on lexical matching. This provides enhanced search capabilities for:
 
 * Query misspellings and typographical errors
 * Conceptual similarity despite different terminology
@@ -71,6 +71,27 @@ The semantic search functionality employs text embeddings with GGUF models embed
 * Morphological variations (plurals, verb tenses)
 
 Semantic search complements the FTS5 lexical search to deliver more comprehensive results.
+
+### Embedding Modes
+
+Wikilite supports two methods for generating and processing embeddings:
+
+1. **Native (Pure Go)**: Runs locally without external dependencies using built-in support for Qwen3 embeddings.
+2. **External API**: Delegates embedding generation to an external server (such as llama.cpp or an OpenAI-compatible service) via command-line flags.
+
+#### Configuration Flags
+
+* **Enable External API**: Pass the `-ai-api` flag to route embedding generation to an external service.
+* **Endpoint URL**: Specify the API URL with `-ai-api-url` (defaults to `http://localhost:11434/v1/embeddings` for local llama.cpp instances).
+* **Authentication**: Use `-ai-api-key` to supply your API authorization key if required.
+* **Model Selection**: Define the target embedding model name using `-ai-model`.
+* **ANN Tuning**: Adjust Approximate Nearest Neighbor settings using `-ai-ann`, `-ai-ann-mode [mrl/binary]`, and `-ai-ann-size`.
+* **Synchronization**: Run `-ai-sync` to generate the missing embeddings for your database.
+
+For example, to run an interactive CLI search utilizing a custom local llama.cpp instance for embeddings:
+```bash
+./wikilite -cli -db wikilite.db -ai-api -ai-api-url "http://localhost:11434/v1/embeddings" -ai-model "qwen3-embeddings"
+```
 
 ## Pre-built Databases
 
@@ -82,4 +103,4 @@ Databases in the "lexical" directory support full-text search only, while others
 
 * **Wikipedia**: For providing the valuable data that powers Wikilite.
 * **SQLite**: For providing the robust database engine that enables fast and efficient local data storage.
-* **LLaMA.cpp**: For enabling the internal generation of embeddings, enhancing the standalone semantic search capabilities of Wikilite.
+* **Qwen**: For the open-source text embedding models that power the native semantic search capabilities of Wikilite.
