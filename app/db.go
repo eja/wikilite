@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"time"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -16,132 +17,164 @@ type DBHandler struct {
 }
 
 func NewDBHandler(dbPath string) (*DBHandler, error) {
-	conn, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite|sqlite.OpenCreate)
-	if err != nil {
-		return nil, fmt.Errorf("error opening database: %v", err)
+	isReadOnly := !options.aiSync && options.wikiImport == "" && options.aiModelImport == "" && !options.dbCompress
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		isReadOnly = false
 	}
 
-	pragmas := []string{
-		"PRAGMA synchronous = OFF",
-		"PRAGMA journal_mode = OFF",
-		"PRAGMA foreign_keys = OFF",
-		"PRAGMA cache_size = -10000",
-		"PRAGMA mmap_size = 268435456",
-		"PRAGMA temp_store = MEMORY",
-	}
-	for _, pragma := range pragmas {
-		if err := sqlitex.ExecuteTransient(conn, pragma, nil); err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("error executing initialization PRAGMA %s: %v", pragma, err)
+	var conn *sqlite.Conn
+	var err error
+
+	if isReadOnly {
+		conn, err = sqlite.OpenConn(dbPath, sqlite.OpenReadOnly)
+		if err != nil {
+			return nil, fmt.Errorf("error opening database in read-only mode: %v", err)
+		}
+	} else {
+		conn, err = sqlite.OpenConn(dbPath, sqlite.OpenReadWrite|sqlite.OpenCreate)
+		if err != nil {
+			return nil, fmt.Errorf("error opening database in read-write mode: %v", err)
 		}
 	}
 
-	queries := []string{
-		`CREATE TABLE IF NOT EXISTS setup (
-			key TEXT PRIMARY KEY,
-			value BLOB
-		)`,
-		`CREATE TABLE IF NOT EXISTS articles (
-			id INTEGER PRIMARY KEY,
-			title TEXT NOT NULL,
-			entity TEXT NOT NULL
-		)`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS article_search USING fts5(
-			title,
-			content='articles',
-			content_rowid='id'
-		)`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS article_search_vocabulary USING fts5vocab(article_search, row)`,
-		`CREATE TABLE IF NOT EXISTS sections (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			article_id INTEGER,
-			title TEXT,
-			content TEXT,
-			content_flate BLOB,
-			pow INTEGER DEFAULT 0,
-			FOREIGN KEY(article_id) REFERENCES articles(id)
-		)`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS section_search USING fts5(
-			title, content,
-			content='sections',
-			content_rowid='id'
-		)`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS section_search_vocabulary USING fts5vocab(section_search, row)`,
-		`CREATE TABLE IF NOT EXISTS vocabulary (term TEXT)`,
-		`CREATE TABLE IF NOT EXISTS vectors (
-			id INTEGER PRIMARY KEY,
-			embedding BLOB
-		)`,
-		`CREATE TABLE IF NOT EXISTS vectors_ann_chunks (
-			id INTEGER PRIMARY KEY,
-			chunk BLOB
-		)`,
-		`CREATE TABLE IF NOT EXISTS vectors_ann_index (
-			id INTEGER PRIMARY KEY,
-			vectors_id INTEGER NOT NULL,
-			chunk_id INTEGER NOT NULL,
-			chunk_position INTEGER NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_vectors_ann_index_chunk_id_position ON vectors_ann_index (chunk_id, chunk_position)`,
-		`CREATE INDEX IF NOT EXISTS idx_sections_article_id ON sections(article_id)`,
-	}
-	for _, query := range queries {
-		if err := sqlitex.ExecuteTransient(conn, query, nil); err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("error executing schema query: %v", err)
+	if !isReadOnly {
+		pragmas := []string{
+			"PRAGMA synchronous = OFF",
+			"PRAGMA journal_mode = OFF",
+			"PRAGMA foreign_keys = OFF",
+			"PRAGMA cache_size = -10000",
+			"PRAGMA mmap_size = 268435456",
+			"PRAGMA temp_store = MEMORY",
+		}
+		for _, pragma := range pragmas {
+			if err := sqlitex.ExecuteTransient(conn, pragma, nil); err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("error executing initialization PRAGMA %s: %v", pragma, err)
+			}
+		}
+
+		queries := []string{
+			`CREATE TABLE IF NOT EXISTS setup (
+				key TEXT PRIMARY KEY,
+				value BLOB
+			)`,
+			`CREATE TABLE IF NOT EXISTS articles (
+				id INTEGER PRIMARY KEY,
+				title TEXT NOT NULL,
+				entity TEXT NOT NULL
+			)`,
+			`CREATE VIRTUAL TABLE IF NOT EXISTS article_search USING fts5(
+				title,
+				content='articles',
+				content_rowid='id'
+			)`,
+			`CREATE VIRTUAL TABLE IF NOT EXISTS article_search_vocabulary USING fts5vocab(article_search, row)`,
+			`CREATE TABLE IF NOT EXISTS sections (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				article_id INTEGER,
+				title TEXT,
+				content TEXT,
+				content_flate BLOB,
+				pow INTEGER DEFAULT 0,
+				FOREIGN KEY(article_id) REFERENCES articles(id)
+			)`,
+			`CREATE VIRTUAL TABLE IF NOT EXISTS section_search USING fts5(
+				title, content,
+				content='sections',
+				content_rowid='id'
+			)`,
+			`CREATE VIRTUAL TABLE IF NOT EXISTS section_search_vocabulary USING fts5vocab(section_search, row)`,
+			`CREATE TABLE IF NOT EXISTS vocabulary (term TEXT)`,
+			`CREATE TABLE IF NOT EXISTS vectors (
+				id INTEGER PRIMARY KEY,
+				embedding BLOB
+			)`,
+			`CREATE TABLE IF NOT EXISTS vectors_ann_chunks (
+				id INTEGER PRIMARY KEY,
+				chunk BLOB
+			)`,
+			`CREATE TABLE IF NOT EXISTS vectors_ann_index (
+				id INTEGER PRIMARY KEY,
+				vectors_id INTEGER NOT NULL,
+				chunk_id INTEGER NOT NULL,
+				chunk_position INTEGER NOT NULL
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_vectors_ann_index_chunk_id_position ON vectors_ann_index (chunk_id, chunk_position)`,
+			`CREATE INDEX IF NOT EXISTS idx_sections_article_id ON sections(article_id)`,
+		}
+		for _, query := range queries {
+			if err := sqlitex.ExecuteTransient(conn, query, nil); err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("error executing schema query: %v", err)
+			}
+		}
+	} else {
+		pragmas := []string{
+			"PRAGMA query_only = ON",
+			"PRAGMA cache_size = -10000",
+			"PRAGMA mmap_size = 268435456",
+			"PRAGMA temp_store = MEMORY",
+		}
+		for _, pragma := range pragmas {
+			if err := sqlitex.ExecuteTransient(conn, pragma, nil); err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("error executing read-only PRAGMA %s: %v", pragma, err)
+			}
 		}
 	}
 
 	conn.Close()
 
-	pool, err := sqlitex.NewPool(dbPath, sqlitex.PoolOptions{
+	opts := sqlitex.PoolOptions{
 		PoolSize: 10,
-	})
+	}
+	if isReadOnly {
+		opts.Flags = sqlite.OpenReadOnly | sqlite.OpenURI
+	} else {
+		opts.Flags = sqlite.OpenReadWrite | sqlite.OpenCreate | sqlite.OpenURI
+	}
+
+	pool, err := sqlitex.NewPool(dbPath, opts)
 	if err != nil {
 		return nil, fmt.Errorf("error opening database pool: %v", err)
 	}
 
 	handler := &DBHandler{pool: pool}
 
-	if err := handler.PragmaInitMode(); err != nil {
-		pool.Close()
-		return nil, err
-	}
-
-	if options.language == "" || options.language == "en" {
-		if language, err := handler.SetupGet("language"); err == nil && language != "" {
-			options.language = language
+	if !isReadOnly {
+		if err := handler.PragmaInitMode(); err != nil {
+			pool.Close()
+			return nil, err
+		}
+	} else {
+		if err := handler.PragmaReadMode(); err != nil {
+			pool.Close()
+			return nil, err
 		}
 	}
 
-	if options.aiModel == "" {
-		if model, err := handler.SetupGet("model"); err == nil && model != "" {
-			options.aiModel = model
-		}
+	if language, err := handler.SetupGet("language"); err == nil && language != "" {
+		options.language = language
 	}
 
-	if options.aiAnnMode == "" {
-		if annMode, err := handler.SetupGet("annMode"); err == nil && annMode != "" {
-			options.aiAnnMode = annMode
-		}
+	if model, err := handler.SetupGet("model"); err == nil && model != "" {
+		options.aiModel = model
 	}
 
-	if options.aiAnnSize == 0 {
-		if annSize, err := handler.SetupGet("annSize"); err == nil && annSize != "" {
-			options.aiAnnSize = extractNumberFromString(annSize)
-		}
+	if annMode, err := handler.SetupGet("annMode"); err == nil && annMode != "" {
+		options.aiAnnMode = annMode
 	}
 
-	if options.aiModelPrefixSearch == "" {
-		if modelPrefixSearch, err := handler.SetupGet("modelPrefixSearch"); err == nil && modelPrefixSearch != "" {
-			options.aiModelPrefixSearch = modelPrefixSearch
-		}
+	if annSize, err := handler.SetupGet("annSize"); err == nil && annSize != "" {
+		options.aiAnnSize = extractNumberFromString(annSize)
 	}
 
-	if options.aiModelPrefixSave == "" {
-		if modelPrefixSave, err := handler.SetupGet("modelPrefixSave"); err == nil && modelPrefixSave != "" {
-			options.aiModelPrefixSave = modelPrefixSave
-		}
+	if modelPrefixSearch, err := handler.SetupGet("modelPrefixSearch"); err == nil && modelPrefixSearch != "" {
+		options.aiModelPrefixSearch = modelPrefixSearch
+	}
+
+	if modelPrefixSave, err := handler.SetupGet("modelPrefixSave"); err == nil && modelPrefixSave != "" {
+		options.aiModelPrefixSave = modelPrefixSave
 	}
 
 	return handler, nil
