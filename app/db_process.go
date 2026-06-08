@@ -163,22 +163,48 @@ func (h *DBHandler) ProcessEmbeddings() (err error) {
 				return err
 			}
 
-			for _, s := range sections {
-				fullSectionText := s.aTitle + " - " + s.sTitle + "\n\n" + s.content
-				embedding, err := aiEmbeddings(options.aiModelPrefixSave + fullSectionText)
+			subBatchSize := 16
+			for i := 0; i < len(sections); i += subBatchSize {
+				endIdx := min(i+subBatchSize, len(sections))
+				chunk := sections[i:endIdx]
+
+				var texts []string
+				for _, s := range chunk {
+					fullSectionText := s.aTitle + " - " + s.sTitle + "\n\n" + s.content
+					texts = append(texts, options.aiModelPrefixSave+fullSectionText)
+				}
+
+				var embeddings [][]float32
+				var err error
+
+				if options.aiApi {
+					embeddings, err = aiApiEmbeddingsBatch(texts)
+				} else {
+					embeddings = make([][]float32, len(chunk))
+					for idx, text := range texts {
+						embeddings[idx], err = localAiEmbeddings(text)
+						if err != nil {
+							break
+						}
+					}
+				}
+
 				if err != nil {
-					log.Printf("Embedding generation error for section %d: %v", s.id, err)
-					problematicIDs = append(problematicIDs, s.id)
+					log.Printf("Embedding generation error for batch starting at index %d: %v", i, err)
+					for _, s := range chunk {
+						problematicIDs = append(problematicIDs, s.id)
+					}
 					continue
 				}
 
-				err = sqlitex.Execute(conn, "INSERT OR REPLACE INTO vectors (id, embedding) VALUES (?, ?)", &sqlitex.ExecOptions{
-					Args: []any{s.id, Float32ToBytes(embedding)},
-				})
-				if err != nil {
-					log.Printf("Error inserting vector for section %d: %v", s.id, err)
-					problematicIDs = append(problematicIDs, s.id)
-					continue
+				for idx, s := range chunk {
+					err = sqlitex.Execute(conn, "INSERT OR REPLACE INTO vectors (id, embedding) VALUES (?, ?)", &sqlitex.ExecOptions{
+						Args: []any{s.id, Float32ToBytes(embeddings[idx])},
+					})
+					if err != nil {
+						log.Printf("Error inserting vector for section %d: %v", s.id, err)
+						problematicIDs = append(problematicIDs, s.id)
+					}
 				}
 			}
 

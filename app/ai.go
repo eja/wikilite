@@ -10,7 +10,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
+	"time"
 )
 
 var (
@@ -67,7 +69,7 @@ func aiApiEmbeddings(input string) (output []float32, err error) {
 	url := options.aiApiUrl
 	payload := aiEmbeddingRequest{
 		Model:          options.aiModel,
-		Input:          input,
+		Input:          []string{input},
 		EncodingFormat: "float",
 	}
 
@@ -86,7 +88,7 @@ func aiApiEmbeddings(input string) (output []float32, err error) {
 		req.Header.Set("Authorization", "Bearer "+options.aiApiKey)
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %v", err)
@@ -110,6 +112,64 @@ func aiApiEmbeddings(input string) (output []float32, err error) {
 	}
 
 	return apiResp.Data[0].Embedding, nil
+}
+
+func aiApiEmbeddingsBatch(inputs []string) ([][]float32, error) {
+	url := options.aiApiUrl
+	payload := aiEmbeddingRequest{
+		Model:          options.aiModel,
+		Input:          inputs,
+		EncodingFormat: "float",
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal batch request: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(context.TODO(), "POST", url, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if options.aiApiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+options.aiApiKey)
+	}
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var apiResp aiEmbeddingResponse
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&apiResp); decodeErr != nil {
+		return nil, fmt.Errorf("failed to decode response (status %d): %v", resp.StatusCode, decodeErr)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		if apiResp.Error.Message != "" {
+			return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, apiResp.Error.Message)
+		}
+		return nil, fmt.Errorf("API request failed with status %d", resp.StatusCode)
+	}
+
+	if len(apiResp.Data) != len(inputs) {
+		return nil, fmt.Errorf("returned embedding count (%d) mismatch with inputs (%d)", len(apiResp.Data), len(inputs))
+	}
+
+	sort.Slice(apiResp.Data, func(i, j int) bool {
+		return apiResp.Data[i].Index < apiResp.Data[j].Index
+	})
+
+	results := make([][]float32, len(inputs))
+	for i, d := range apiResp.Data {
+		results[i] = d.Embedding
+	}
+
+	return results, nil
 }
 
 func localAiEnabled() bool {
