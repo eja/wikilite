@@ -82,148 +82,157 @@ func (h *DBHandler) ProcessEmbeddings() (err error) {
 
 	log.Printf("Loading pending vector IDs for Embeddings processing...")
 
-	conn := h.pool.Get(context.Background())
-	if conn == nil {
-		return fmt.Errorf("failed to get connection")
-	}
-	defer h.pool.Put(conn)
-
 	var pendingSectionIDs []int
-	err = sqlitex.Execute(conn, `
-		SELECT s.id 
-		FROM sections s 
-		WHERE s.id NOT IN (SELECT id FROM vectors)
-		ORDER BY s.id`, &sqlitex.ExecOptions{
-		ResultFunc: func(stmt *sqlite.Stmt) error {
-			pendingSectionIDs = append(pendingSectionIDs, int(stmt.ColumnInt64(0)))
-			return nil
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("error loading pending section IDs: %w", err)
-	}
-
-	totalCount := len(pendingSectionIDs)
-	log.Printf("Pending section embeddings: %d", totalCount)
-
-	if totalCount == 0 {
-		log.Printf("No sections to process for embeddings")
-	}
-
-	startTime := time.Now()
-	processed := 0
 	var problematicIDs []int
 
-	for processed < totalCount {
-		end := min(processed+batchSize, totalCount)
-		batchIDs := pendingSectionIDs[processed:end]
-		if len(batchIDs) == 0 {
-			break
+	err = func() error {
+		conn := h.pool.Get(context.Background())
+		if conn == nil {
+			return fmt.Errorf("failed to get connection")
+		}
+		defer h.pool.Put(conn)
+
+		err = sqlitex.Execute(conn, `
+			SELECT s.id 
+			FROM sections s 
+			WHERE s.id NOT IN (SELECT id FROM vectors)
+			ORDER BY s.id`, &sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				pendingSectionIDs = append(pendingSectionIDs, int(stmt.ColumnInt64(0)))
+				return nil
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("error loading pending section IDs: %w", err)
 		}
 
-		err = func() error {
-			var err error
-			deferFn := sqlitex.Transaction(conn)
-			defer deferFn(&err)
+		totalCount := len(pendingSectionIDs)
+		log.Printf("Pending section embeddings: %d", totalCount)
 
-			placeholders := make([]string, len(batchIDs))
-			args := make([]any, len(batchIDs))
-			for i, id := range batchIDs {
-				placeholders[i] = "?"
-				args[i] = id
+		if totalCount == 0 {
+			log.Printf("No sections to process for embeddings")
+		}
+
+		startTime := time.Now()
+		processed := 0
+
+		for processed < totalCount {
+			end := min(processed+batchSize, totalCount)
+			batchIDs := pendingSectionIDs[processed:end]
+			if len(batchIDs) == 0 {
+				break
 			}
 
-			query := fmt.Sprintf(`
-				SELECT s.id, s.title, a.title, s.content 
-				FROM sections s 
-				JOIN articles a ON s.article_id = a.id 
-				WHERE s.id IN (%s)`, strings.Join(placeholders, ","))
+			err = func() error {
+				var err error
+				deferFn := sqlitex.Transaction(conn)
+				defer deferFn(&err)
 
-			type sectionData struct {
-				id      int
-				sTitle  string
-				aTitle  string
-				content string
-			}
-			var sections []sectionData
-
-			err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
-				Args: args,
-				ResultFunc: func(stmt *sqlite.Stmt) error {
-					sections = append(sections, sectionData{
-						id:      int(stmt.ColumnInt64(0)),
-						sTitle:  stmt.ColumnText(1),
-						aTitle:  stmt.ColumnText(2),
-						content: stmt.ColumnText(3),
-					})
-					return nil
-				},
-			})
-			if err != nil {
-				return err
-			}
-
-			subBatchSize := 16
-			for i := 0; i < len(sections); i += subBatchSize {
-				endIdx := min(i+subBatchSize, len(sections))
-				chunk := sections[i:endIdx]
-
-				var texts []string
-				for _, s := range chunk {
-					fullSectionText := s.aTitle + " - " + s.sTitle + "\n\n" + s.content
-					texts = append(texts, options.aiModelPrefixSave+fullSectionText)
+				placeholders := make([]string, len(batchIDs))
+				args := make([]any, len(batchIDs))
+				for i, id := range batchIDs {
+					placeholders[i] = "?"
+					args[i] = id
 				}
 
-				var embeddings [][]float32
-				var err error
+				query := fmt.Sprintf(`
+					SELECT s.id, s.title, a.title, s.content 
+					FROM sections s 
+					JOIN articles a ON s.article_id = a.id 
+					WHERE s.id IN (%s)`, strings.Join(placeholders, ","))
 
-				if options.aiApi {
-					embeddings, err = aiApiEmbeddingsBatch(texts)
-				} else {
-					embeddings = make([][]float32, len(chunk))
-					for idx, text := range texts {
-						embeddings[idx], err = localAiEmbeddings(text)
+				type sectionData struct {
+					id      int
+					sTitle  string
+					aTitle  string
+					content string
+				}
+				var sections []sectionData
+
+				err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
+					Args: args,
+					ResultFunc: func(stmt *sqlite.Stmt) error {
+						sections = append(sections, sectionData{
+							id:      int(stmt.ColumnInt64(0)),
+							sTitle:  stmt.ColumnText(1),
+							aTitle:  stmt.ColumnText(2),
+							content: stmt.ColumnText(3),
+						})
+						return nil
+					},
+				})
+				if err != nil {
+					return err
+				}
+
+				subBatchSize := 16
+				for i := 0; i < len(sections); i += subBatchSize {
+					endIdx := min(i+subBatchSize, len(sections))
+					chunk := sections[i:endIdx]
+
+					var texts []string
+					for _, s := range chunk {
+						fullSectionText := s.aTitle + " - " + s.sTitle + "\n\n" + s.content
+						texts = append(texts, options.aiModelPrefixSave+fullSectionText)
+					}
+
+					var embeddings [][]float32
+					var err error
+
+					if options.aiApi {
+						embeddings, err = aiApiEmbeddingsBatch(texts)
+					} else {
+						embeddings = make([][]float32, len(chunk))
+						for idx, text := range texts {
+							embeddings[idx], err = localAiEmbeddings(text)
+							if err != nil {
+								break
+							}
+						}
+					}
+
+					if err != nil {
+						log.Printf("Embedding generation error for batch starting at index %d: %v", i, err)
+						for _, s := range chunk {
+							problematicIDs = append(problematicIDs, s.id)
+						}
+						continue
+					}
+
+					for idx, s := range chunk {
+						err = sqlitex.Execute(conn, "INSERT OR REPLACE INTO vectors (id, embedding) VALUES (?, ?)", &sqlitex.ExecOptions{
+							Args: []any{s.id, Float32ToBytes(embeddings[idx])},
+						})
 						if err != nil {
-							break
+							log.Printf("Error inserting vector for section %d: %v", s.id, err)
+							problematicIDs = append(problematicIDs, s.id)
 						}
 					}
 				}
 
-				if err != nil {
-					log.Printf("Embedding generation error for batch starting at index %d: %v", i, err)
-					for _, s := range chunk {
-						problematicIDs = append(problematicIDs, s.id)
-					}
-					continue
-				}
-
-				for idx, s := range chunk {
-					err = sqlitex.Execute(conn, "INSERT OR REPLACE INTO vectors (id, embedding) VALUES (?, ?)", &sqlitex.ExecOptions{
-						Args: []any{s.id, Float32ToBytes(embeddings[idx])},
-					})
-					if err != nil {
-						log.Printf("Error inserting vector for section %d: %v", s.id, err)
-						problematicIDs = append(problematicIDs, s.id)
-					}
-				}
+				return nil
+			}()
+			if err != nil {
+				return err
 			}
 
-			return nil
-		}()
-		if err != nil {
-			return err
+			processed += len(batchIDs)
+			progress := float64(processed) / float64(totalCount) * 100
+			elapsed := time.Since(startTime)
+
+			if progress > 0 {
+				estimatedTotalTime := time.Duration(float64(elapsed) / (progress / 100.0))
+				remainingTime := estimatedTotalTime - elapsed
+				log.Printf("Embedding progress: %.2f%%, Processed: %d/%d, Remaining: %s",
+					progress, processed, totalCount, remainingTime.Truncate(time.Second))
+			}
 		}
 
-		processed += len(batchIDs)
-		progress := float64(processed) / float64(totalCount) * 100
-		elapsed := time.Since(startTime)
+		return nil
+	}()
 
-		if progress > 0 {
-			estimatedTotalTime := time.Duration(float64(elapsed) / (progress / 100.0))
-			remainingTime := estimatedTotalTime - elapsed
-			log.Printf("Embedding progress: %.2f%%, Processed: %d/%d, Remaining: %s",
-				progress, processed, totalCount, remainingTime.Truncate(time.Second))
-		}
+	if err != nil {
+		return err
 	}
 
 	if len(problematicIDs) > 0 {

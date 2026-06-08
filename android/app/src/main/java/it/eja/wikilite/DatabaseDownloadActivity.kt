@@ -2,6 +2,7 @@
 
 package it.eja.wikilite
 
+import android.app.ActivityManager
 import android.app.ProgressDialog
 import android.content.Intent
 import android.content.SharedPreferences
@@ -115,8 +116,24 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         }
     }
 
+    private fun getAvailableMemoryGB(): Double {
+        val activityManager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        val memoryInfo = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memoryInfo)
+        return memoryInfo.availMem.toDouble() / (1024.0 * 1024.0 * 1024.0)
+    }
+
     private fun loadFilesFromHuggingFace(): List<String> {
         val files = mutableListOf<String>()
+        val availMemGB = getAvailableMemoryGB()
+        val restrictToLexical = availMemGB <= 2.5
+
+        if (restrictToLexical) {
+            runOnUiThread {
+                Toast.makeText(this@DatabaseDownloadActivity, "List restricted to lexical only because there is not enough free RAM.", Toast.LENGTH_LONG).show()
+            }
+        }
+
         try {
             val client = OkHttpClient()
             val request = Request.Builder()
@@ -134,8 +151,14 @@ class DatabaseDownloadActivity : AppCompatActivity() {
                     val item = siblings.getJSONObject(i)
                     val rfilename = item.getString("rfilename")
 
-                    if (rfilename.endsWith(".db.gz") && rfilename.startsWith("lexical")) {
-                        files.add(rfilename)
+                    if (rfilename.endsWith(".db.gz")) {
+                        if (restrictToLexical) {
+                            if (rfilename.startsWith("lexical")) {
+                                files.add(rfilename)
+                            }
+                        } else {
+                            files.add(rfilename)
+                        }
                     }
                 }
             }

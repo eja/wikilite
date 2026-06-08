@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -129,7 +130,11 @@ func SearchCli() error {
 			articles = make(map[int]int)
 			for i, result := range results {
 				articles[i+1] = result.ArticleID
-				fmt.Printf("% 3d [%s] %s\n", i+1, result.Type, result.Title)
+				if options.log {
+					fmt.Printf("% 3d [%s] [%.0f] %s\n", i+1, result.Type, result.Power, result.Title)
+				} else {
+					fmt.Printf("% 3d [%s] %s\n", i+1, result.Type, result.Title)
+				}
 			}
 		}
 	}
@@ -146,14 +151,21 @@ func searchOptimize(results []SearchResult, limit int) []SearchResult {
 		} else {
 			for i := range accumulatedResults {
 				if accumulatedResults[i].ArticleID == result.ArticleID {
-					accumulatedResults[i].Power += result.Power
+					p1 := accumulatedResults[i].Power
+					p2 := result.Power
+					accumulatedResults[i].Power = p1 + p2 - (p1 * p2 / 100.0)
 					break
 				}
 			}
 		}
-		if len(accumulatedResults) >= limit {
-			break
-		}
+	}
+
+	sort.Slice(accumulatedResults, func(i, j int) bool {
+		return accumulatedResults[i].Power > accumulatedResults[j].Power
+	})
+
+	if len(accumulatedResults) > limit {
+		accumulatedResults = accumulatedResults[:limit]
 	}
 
 	return accumulatedResults

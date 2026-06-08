@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,15 @@ func Snippet(value string) string {
 		return value[:160] + "..."
 	}
 	return value
+}
+
+func normalizeBM25(score float64) float64 {
+	rawScore := -score
+	if rawScore < 0 {
+		rawScore = 0
+	}
+	const c = 0.1
+	return (1.0 - math.Exp(-c*rawScore)) * 100.0
 }
 
 func (h *DBHandler) SearchTitle(searchQuery string, limit int) ([]SearchResult, error) {
@@ -49,7 +59,7 @@ func (h *DBHandler) SearchTitle(searchQuery string, limit int) ([]SearchResult, 
 			result.ArticleID = int(stmt.ColumnInt64(0))
 			result.Title = stmt.ColumnText(1)
 			result.Snippet = stmt.ColumnText(2)
-			result.Power = stmt.ColumnFloat(3)
+			result.Power = normalizeBM25(stmt.ColumnFloat(3))
 
 			var textContent string
 			contentQuery := `SELECT content FROM sections WHERE article_id = ? ORDER BY id LIMIT 1`
@@ -113,7 +123,7 @@ func (h *DBHandler) SearchContent(searchQuery string, limit int) ([]SearchResult
 			sectionID := int(stmt.ColumnInt64(2))
 			result.Text = stmt.ColumnText(3)
 			result.Snippet = stmt.ColumnText(4)
-			result.Power = stmt.ColumnFloat(5)
+			result.Power = normalizeBM25(stmt.ColumnFloat(5))
 
 			if result.Text == "" {
 				var contentFlate []byte
@@ -214,6 +224,24 @@ func (h *DBHandler) SearchVectors(query string, limit int) ([]SearchResult, erro
 		return nil, nil
 	}
 
+	queryEmbedding, err := aiEmbeddings(options.aiModelPrefixSearch + query)
+	if err != nil {
+		return nil, err
+	}
+
+	var topAnnResults []VectorDistance
+	if hasAnn {
+		annLimit := limit
+		if hasVectors {
+			annLimit = limit * limit
+		}
+		var err error
+		topAnnResults, err = h.SearchAnn(queryEmbedding, options.aiAnnMode, options.aiAnnSize, annLimit)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	conn := h.pool.Get(context.Background())
 	if conn == nil {
 		return nil, fmt.Errorf("failed to get connection")
@@ -224,21 +252,7 @@ func (h *DBHandler) SearchVectors(query string, limit int) ([]SearchResult, erro
 	topResults := make([]VectorDistance, 0, limit)
 	sqlQuery := "SELECT id, embedding FROM vectors"
 
-	queryEmbedding, err := aiEmbeddings(options.aiModelPrefixSearch + query)
-	if err != nil {
-		return nil, err
-	}
-
 	if hasAnn {
-		annLimit := limit
-		if hasVectors {
-			annLimit = limit * limit
-		}
-		topAnnResults, err := h.SearchAnn(queryEmbedding, options.aiAnnMode, options.aiAnnSize, annLimit)
-		if err != nil {
-			return nil, err
-		}
-		var vectorsIDs []int64
 		var vectorsIDsString []string
 		for _, v := range topAnnResults {
 			var vectorsID int64
@@ -252,15 +266,15 @@ func (h *DBHandler) SearchVectors(query string, limit int) ([]SearchResult, erro
 			if err != nil {
 				return nil, err
 			}
-			vectorsIDs = append(vectorsIDs, vectorsID)
-			vectorsIDsString = append(vectorsIDsString, strconv.FormatInt(vectorsID, 10))
+
+			if !hasVectors {
+				topResults = append(topResults, VectorDistance{ID: vectorsID, Distance: v.Distance})
+			} else {
+				vectorsIDsString = append(vectorsIDsString, strconv.FormatInt(vectorsID, 10))
+			}
 		}
 		if hasVectors {
 			sqlQuery += " WHERE id IN (" + strings.Join(vectorsIDsString, ",") + ")"
-		} else {
-			for _, id := range vectorsIDs {
-				topResults = append(topResults, VectorDistance{ID: id, Distance: float32(0)})
-			}
 		}
 	}
 
@@ -330,7 +344,15 @@ func (h *DBHandler) SearchVectors(query string, limit int) ([]SearchResult, erro
 		result.Text = sectionContent
 		result.Snippet = Snippet(sectionContent)
 		result.Type = "V"
-		result.Power = float64(vd.Distance)
+
+		affinity := (float64(vd.Distance) + 1.0) / 2.0 * 100.0
+		if affinity < 0 {
+			affinity = 0
+		} else if affinity > 100 {
+			affinity = 100
+		}
+		result.Power = affinity
+
 		results = append(results, result)
 	}
 
@@ -392,7 +414,9 @@ func (h *DBHandler) SearchAnn(vectors []float32, mode string, size int, limit in
 					if err != nil {
 						return err
 					}
-					distance = float32(len(quantizedQuery)*8) - hammingDist
+					totalBits := float32(len(quantizedQuery) * 8)
+					matchingBits := totalBits - hammingDist
+					distance = (matchingBits/totalBits)*2.0 - 1.0
 				}
 
 				result.ChunkRowID = chunkRowID
