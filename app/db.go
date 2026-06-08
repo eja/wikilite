@@ -3,19 +3,37 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
 	"time"
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitex"
 )
 
 type DBHandler struct {
-	db *sql.DB
+	pool *sqlitex.Pool
 }
 
-func (h *DBHandler) initializeDB() error {
-	if err := h.PragmaInitMode(); err != nil {
-		return err
+func NewDBHandler(dbPath string) (*DBHandler, error) {
+	conn, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite|sqlite.OpenCreate)
+	if err != nil {
+		return nil, fmt.Errorf("error opening database: %v", err)
+	}
+
+	pragmas := []string{
+		"PRAGMA synchronous = OFF",
+		"PRAGMA journal_mode = OFF",
+		"PRAGMA foreign_keys = OFF",
+		"PRAGMA cache_size = -10000",
+		"PRAGMA mmap_size = 268435456",
+		"PRAGMA temp_store = MEMORY",
+	}
+	for _, pragma := range pragmas {
+		if err := sqlitex.ExecuteTransient(conn, pragma, nil); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("error executing initialization PRAGMA %s: %v", pragma, err)
+		}
 	}
 
 	queries := []string{
@@ -23,7 +41,6 @@ func (h *DBHandler) initializeDB() error {
 			key TEXT PRIMARY KEY,
 			value BLOB
 		)`,
-
 		`CREATE TABLE IF NOT EXISTS articles (
 			id INTEGER PRIMARY KEY,
 			title TEXT NOT NULL,
@@ -35,7 +52,6 @@ func (h *DBHandler) initializeDB() error {
 			content_rowid='id'
 		)`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS article_search_vocabulary USING fts5vocab(article_search, row)`,
-
 		`CREATE TABLE IF NOT EXISTS sections (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			article_id INTEGER,
@@ -51,88 +67,99 @@ func (h *DBHandler) initializeDB() error {
 			content_rowid='id'
 		)`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS section_search_vocabulary USING fts5vocab(section_search, row)`,
-
 		`CREATE TABLE IF NOT EXISTS vocabulary (term TEXT)`,
-
 		`CREATE TABLE IF NOT EXISTS vectors (
 			id INTEGER PRIMARY KEY,
 			embedding BLOB
 		)`,
-
 		`CREATE TABLE IF NOT EXISTS vectors_ann_chunks (
 			id INTEGER PRIMARY KEY,
 			chunk BLOB
 		)`,
-
 		`CREATE TABLE IF NOT EXISTS vectors_ann_index (
 			id INTEGER PRIMARY KEY,
 			vectors_id INTEGER NOT NULL,
 			chunk_id INTEGER NOT NULL,
 			chunk_position INTEGER NOT NULL
 		)`,
-
 		`CREATE INDEX IF NOT EXISTS idx_vectors_ann_index_chunk_id_position ON vectors_ann_index (chunk_id, chunk_position)`,
 		`CREATE INDEX IF NOT EXISTS idx_sections_article_id ON sections(article_id)`,
 	}
 	for _, query := range queries {
-		if _, err := h.db.Exec(query); err != nil {
-			return fmt.Errorf("error executing query %s: %v", query, err)
+		if err := sqlitex.ExecuteTransient(conn, query, nil); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("error executing schema query: %v", err)
 		}
 	}
 
-	if err := h.PragmaReadMode(); err != nil {
-		return err
-	}
+	conn.Close()
 
-	return nil
-}
-
-func NewDBHandler(dbPath string) (*DBHandler, error) {
-	db, err := openDB(dbPath)
+	pool, err := sqlitex.NewPool(dbPath, sqlitex.PoolOptions{
+		PoolSize: 10,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("error opening database: %v", err)
+		return nil, fmt.Errorf("error opening database pool: %v", err)
 	}
 
-	handler := &DBHandler{db: db}
-	if err := handler.initializeDB(); err != nil {
-		db.Close()
+	handler := &DBHandler{pool: pool}
+
+	if err := handler.PragmaInitMode(); err != nil {
+		pool.Close()
 		return nil, err
 	}
 
-	if language, err := handler.SetupGet("language"); err == nil && language != "" {
-		options.language = language
+	if options.language == "" || options.language == "en" {
+		if language, err := handler.SetupGet("language"); err == nil && language != "" {
+			options.language = language
+		}
 	}
 
-	if model, err := handler.SetupGet("model"); err == nil && model != "" {
-		options.aiModel = model
+	if options.aiModel == "" {
+		if model, err := handler.SetupGet("model"); err == nil && model != "" {
+			options.aiModel = model
+		}
 	}
 
-	if annMode, err := handler.SetupGet("annMode"); err == nil && annMode != "" {
-		options.aiAnnMode = annMode
+	if options.aiAnnMode == "" {
+		if annMode, err := handler.SetupGet("annMode"); err == nil && annMode != "" {
+			options.aiAnnMode = annMode
+		}
 	}
 
-	if annSize, err := handler.SetupGet("annSize"); err == nil && annSize != "" {
-		options.aiAnnSize = extractNumberFromString(annSize)
+	if options.aiAnnSize == 0 {
+		if annSize, err := handler.SetupGet("annSize"); err == nil && annSize != "" {
+			options.aiAnnSize = extractNumberFromString(annSize)
+		}
 	}
 
-	if modelPrefixSearch, err := handler.SetupGet("modelPrefixSearch"); err == nil && modelPrefixSearch != "" {
-		options.aiModelPrefixSearch = modelPrefixSearch
+	if options.aiModelPrefixSearch == "" {
+		if modelPrefixSearch, err := handler.SetupGet("modelPrefixSearch"); err == nil && modelPrefixSearch != "" {
+			options.aiModelPrefixSearch = modelPrefixSearch
+		}
 	}
 
-	if modelPrefixSave, err := handler.SetupGet("modelPrefixSave"); err == nil && modelPrefixSave != "" {
-		options.aiModelPrefixSave = modelPrefixSave
+	if options.aiModelPrefixSave == "" {
+		if modelPrefixSave, err := handler.SetupGet("modelPrefixSave"); err == nil && modelPrefixSave != "" {
+			options.aiModelPrefixSave = modelPrefixSave
+		}
 	}
 
 	return handler, nil
 }
 
 func (h *DBHandler) Close() error {
-	return h.db.Close()
+	return h.pool.Close()
 }
 
 func (h *DBHandler) Pragma(pragmas []string) error {
+	conn := h.pool.Get(context.Background())
+	if conn == nil {
+		return fmt.Errorf("failed to get connection")
+	}
+	defer h.pool.Put(conn)
+
 	for _, pragma := range pragmas {
-		if _, err := h.db.Exec(pragma); err != nil {
+		if err := sqlitex.ExecuteTransient(conn, pragma, nil); err != nil {
 			return fmt.Errorf("error executing PRAGMA %s: %v", pragma, err)
 		}
 	}
@@ -142,7 +169,6 @@ func (h *DBHandler) Pragma(pragmas []string) error {
 func (h *DBHandler) PragmaInitMode() error {
 	pragmas := []string{
 		"PRAGMA synchronous = OFF",
-		"PRAGMA journal_mode = OFF",
 		"PRAGMA foreign_keys = OFF",
 		"PRAGMA cache_size = -10000",
 		"PRAGMA mmap_size = 268435456",
@@ -168,30 +194,30 @@ func (h *DBHandler) PragmaImportMode() error {
 }
 
 func (h *DBHandler) Optimize() error {
-	tx, err := h.db.Begin()
-	if err != nil {
-		return fmt.Errorf("error starting transaction: %v", err)
+	conn := h.pool.Get(context.Background())
+	if conn == nil {
+		return fmt.Errorf("failed to get connection")
 	}
-	defer tx.Rollback()
+	defer h.pool.Put(conn)
+
+	var err error
+	deferFn := sqlitex.Transaction(conn)
+	defer deferFn(&err)
 
 	log.Println("Deleting duplicate sections")
-	_, err = tx.Exec(`
+	err = sqlitex.ExecuteTransient(conn, `
 		DELETE FROM sections
 		WHERE id NOT IN (
 			SELECT MAX(id)
 			FROM sections
 			GROUP BY article_id, title
-		)`)
+		)`, nil)
 	if err != nil {
 		return fmt.Errorf("error deleting duplicate sections: %v", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("error committing transaction: %v", err)
-	}
-
 	log.Println("Running VACUUM")
-	_, err = h.db.Exec("VACUUM")
+	err = sqlitex.ExecuteTransient(conn, "VACUUM", nil)
 	if err != nil {
 		return fmt.Errorf("error executing VACUUM: %v", err)
 	}
@@ -199,27 +225,58 @@ func (h *DBHandler) Optimize() error {
 	return nil
 }
 
-func (h *DBHandler) SetupPut(key, value string) (err error) {
-	_, err = h.db.Exec("INSERT OR REPLACE INTO setup (key, value) VALUES (?, ?)", key, value)
-	return
+func (h *DBHandler) SetupPut(key, value string) error {
+	conn := h.pool.Get(context.Background())
+	if conn == nil {
+		return fmt.Errorf("failed to get connection")
+	}
+	defer h.pool.Put(conn)
+
+	return sqlitex.ExecuteTransient(conn, "INSERT OR REPLACE INTO setup (key, value) VALUES (?, ?)", &sqlitex.ExecOptions{
+		Args: []any{key, value},
+	})
 }
 
-func (h *DBHandler) SetupGet(key string) (value string, err error) {
-	err = h.db.QueryRow("SELECT value FROM setup WHERE key = ? LIMIT 1", key).Scan(&value)
-	return
+func (h *DBHandler) SetupGet(key string) (string, error) {
+	conn := h.pool.Get(context.Background())
+	if conn == nil {
+		return "", fmt.Errorf("failed to get connection")
+	}
+	defer h.pool.Put(conn)
+
+	var value string
+	var found bool
+	err := sqlitex.ExecuteTransient(conn, "SELECT value FROM setup WHERE key = ? LIMIT 1", &sqlitex.ExecOptions{
+		Args: []any{key},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			value = stmt.ColumnText(0)
+			found = true
+			return nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("key not found")
+	}
+	return value, nil
 }
 
 func (h *DBHandler) ArticlePut(article OutputArticle) error {
-	tx, err := h.db.Begin()
-	if err != nil {
-		return fmt.Errorf("error starting transaction: %v", err)
+	conn := h.pool.Get(context.Background())
+	if conn == nil {
+		return fmt.Errorf("failed to get connection")
 	}
-	defer tx.Rollback()
+	defer h.pool.Put(conn)
 
-	_, err = tx.Exec(
-		"INSERT OR REPLACE INTO articles (id, title, entity) VALUES (?, ?, ?)",
-		article.ID, article.Title, article.Entity,
-	)
+	var err error
+	deferFn := sqlitex.Transaction(conn)
+	defer deferFn(&err)
+
+	err = sqlitex.ExecuteTransient(conn, "INSERT OR REPLACE INTO articles (id, title, entity) VALUES (?, ?, ?)", &sqlitex.ExecOptions{
+		Args: []any{article.ID, article.Title, article.Entity},
+	})
 	if err != nil {
 		return fmt.Errorf("error inserting article: %v", err)
 	}
@@ -229,19 +286,24 @@ func (h *DBHandler) ArticlePut(article OutputArticle) error {
 		pow, _ := item["pow"].(int)
 		content, _ := item["content"].(string)
 
-		_, err := tx.Exec(
-			"INSERT INTO sections (article_id, title, content, pow) VALUES (?, ?, ?, ?)",
-			article.ID, title, content, pow,
-		)
+		err = sqlitex.ExecuteTransient(conn, "INSERT INTO sections (article_id, title, content, pow) VALUES (?, ?, ?, ?)", &sqlitex.ExecOptions{
+			Args: []any{article.ID, title, content, pow},
+		})
 		if err != nil {
 			return fmt.Errorf("error inserting section: %v", err)
 		}
 	}
 
-	return tx.Commit()
+	return nil
 }
 
 func (h *DBHandler) ArticleGet(articleID int) (ArticleResult, error) {
+	conn := h.pool.Get(context.Background())
+	if conn == nil {
+		return ArticleResult{}, fmt.Errorf("failed to get connection")
+	}
+	defer h.pool.Put(conn)
+
 	article := ArticleResult{
 		Sections: []ArticleResultSection{},
 	}
@@ -261,55 +323,61 @@ func (h *DBHandler) ArticleGet(articleID int) (ArticleResult, error) {
 		WHERE
 			a.id = ?
 		ORDER BY
-			s.id ASC;
+			s.id ASC
 	`
 
-	rows, err := h.db.Query(sqlQuery, articleID)
-	if err != nil {
-		return article, fmt.Errorf("article query error: %v", err)
-	}
-	defer rows.Close()
-
 	var isFirstRow = true
-	for rows.Next() {
-		var (
-			artID          int
-			artTitle       string
-			artEntity      string
-			section        ArticleResultSection
-			sectionContent sql.NullString
-		)
+	err := sqlitex.ExecuteTransient(conn, sqlQuery, &sqlitex.ExecOptions{
+		Args: []any{articleID},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			var (
+				artID          int
+				artTitle       string
+				artEntity      string
+				section        ArticleResultSection
+				sectionContent string
+			)
 
-		if err := rows.Scan(
-			&artID,
-			&artTitle,
-			&artEntity,
-			&section.ID,
-			&section.Title,
-			&sectionContent,
-		); err != nil {
-			return article, fmt.Errorf("error scanning result: %v", err)
-		}
+			artID = int(stmt.ColumnInt64(0))
+			artTitle = stmt.ColumnText(1)
+			artEntity = stmt.ColumnText(2)
+			section.ID = int(stmt.ColumnInt64(3))
+			section.Title = stmt.ColumnText(4)
+			sectionContent = stmt.ColumnText(5)
 
-		if sectionContent.Valid {
-			section.Content = sectionContent.String
-		} else {
-			var content_flate []byte
-			if err := h.db.QueryRow("SELECT content_flate FROM sections WHERE id = ?", section.ID).Scan(&content_flate); err == nil && content_flate != nil {
-				if content, err := TextInflate(content_flate); err == nil {
-					section.Content = content
+			if sectionContent != "" {
+				section.Content = sectionContent
+			} else {
+				var contentFlate []byte
+				err := sqlitex.ExecuteTransient(conn, "SELECT content_flate FROM sections WHERE id = ?", &sqlitex.ExecOptions{
+					Args: []any{section.ID},
+					ResultFunc: func(subStmt *sqlite.Stmt) error {
+						contentFlate = make([]byte, subStmt.ColumnLen(0))
+						subStmt.ColumnBytes(0, contentFlate)
+						return nil
+					},
+				})
+				if err == nil && len(contentFlate) > 0 {
+					if content, err := TextInflate(contentFlate); err == nil {
+						section.Content = content
+					}
 				}
 			}
-		}
 
-		if isFirstRow {
-			article.ID = artID
-			article.Title = artTitle
-			article.Entity = artEntity
-			isFirstRow = false
-		}
+			if isFirstRow {
+				article.ID = artID
+				article.Title = artTitle
+				article.Entity = artEntity
+				isFirstRow = false
+			}
 
-		article.Sections = append(article.Sections, section)
+			article.Sections = append(article.Sections, section)
+			return nil
+		},
+	})
+
+	if err != nil {
+		return article, fmt.Errorf("article query error: %v", err)
 	}
 
 	if article.ID == 0 {
@@ -320,46 +388,64 @@ func (h *DBHandler) ArticleGet(articleID int) (ArticleResult, error) {
 }
 
 func (h *DBHandler) Compress() error {
-	tx, err := h.db.Begin()
-	if err != nil {
-		return fmt.Errorf("error starting transaction: %v", err)
+	conn := h.pool.Get(context.Background())
+	if conn == nil {
+		return fmt.Errorf("failed to get connection")
 	}
-	defer tx.Rollback()
+	defer h.pool.Put(conn)
+
+	var err error
+	deferFn := sqlitex.Transaction(conn)
+	defer deferFn(&err)
 
 	var totalSections int
-	err = tx.QueryRow("SELECT COUNT(*) FROM sections WHERE content IS NOT NULL AND content != ''").Scan(&totalSections)
+	err = sqlitex.ExecuteTransient(conn, "SELECT COUNT(*) FROM sections WHERE content IS NOT NULL AND content != ''", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			totalSections = int(stmt.ColumnInt64(0))
+			return nil
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("error counting sections: %v", err)
 	}
 
 	log.Printf("Compressing %d sections", totalSections)
 
-	sectionRows, err := tx.Query("SELECT id, content FROM sections WHERE content IS NOT NULL AND content != ''")
+	type section struct {
+		id      int
+		content string
+	}
+	var sections []section
+
+	err = sqlitex.ExecuteTransient(conn, "SELECT id, content FROM sections WHERE content IS NOT NULL AND content != ''", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			sections = append(sections, section{
+				id:      int(stmt.ColumnInt64(0)),
+				content: stmt.ColumnText(1),
+			})
+			return nil
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("error querying sections: %v", err)
 	}
-	defer sectionRows.Close()
 
 	processed := 0
 	compressed := 0
 	var lastLogTime time.Time
 	batchStartTime := time.Now()
 
-	for sectionRows.Next() {
-		var id int
-		var content sql.NullString
-		if err := sectionRows.Scan(&id, &content); err != nil {
-			return fmt.Errorf("error scanning section: %v", err)
-		}
-
-		if content.Valid && content.String != "" {
-			compressedContent, err := TextDeflate(content.String)
+	for _, s := range sections {
+		if s.content != "" {
+			compressedContent, err := TextDeflate(s.content)
 			if err != nil {
 				return fmt.Errorf("error compressing section content: %v", err)
 			}
 
-			if len(compressedContent) < len(content.String) {
-				_, err = tx.Exec("UPDATE sections SET content_flate = ?, content = NULL WHERE id = ?", compressedContent, id)
+			if len(compressedContent) < len(s.content) {
+				err = sqlitex.ExecuteTransient(conn, "UPDATE sections SET content_flate = ?, content = NULL WHERE id = ?", &sqlitex.ExecOptions{
+					Args: []any{compressedContent, s.id},
+				})
 				if err != nil {
 					return fmt.Errorf("error updating section with compressed content: %v", err)
 				}
@@ -373,23 +459,15 @@ func (h *DBHandler) Compress() error {
 		if processed%10000 == 0 || now.Sub(lastLogTime) >= 5*time.Second {
 			progress := (float64(processed) / float64(totalSections) * 100)
 			elapsed := time.Since(batchStartTime)
-			estimatedTotal := time.Duration(float64(elapsed) / float64(processed) * float64(totalSections))
+			estimatedTotal := time.Duration(float64(processed) / float64(totalSections))
 			remaining := estimatedTotal - elapsed
-			log.Printf("Compression progress: %  .2f%% - ETA: %v", progress, remaining.Round(time.Second))
+			log.Printf("Compression progress: %.2f%% - ETA: %v", progress, remaining.Round(time.Second))
 			lastLogTime = now
 		}
 	}
 
-	if err := sectionRows.Err(); err != nil {
-		return fmt.Errorf("error iterating sections: %v", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("error committing compression transaction: %v", err)
-	}
-
-	log.Printf("Compression ready, starting VACUUM...")
-	_, err = h.db.Exec("VACUUM")
+	log.Printf("Compression ready, running VACUUM...")
+	err = sqlitex.ExecuteTransient(conn, "VACUUM", nil)
 	if err != nil {
 		return fmt.Errorf("error executing VACUUM: %v", err)
 	}

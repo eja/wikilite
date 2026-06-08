@@ -12,7 +12,7 @@ import (
 )
 
 const Name = "wikilite"
-const Version = "1.6.6"
+const Version = "1.6.8"
 
 type Config struct {
 	aiAnn               bool
@@ -145,7 +145,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error initializing database: %v\n", err)
 	}
-	defer db.Close()
+	defer func() {
+		if db != nil {
+			db.Close()
+		}
+	}()
 
 	if err := aiInit(); err != nil {
 		log.Printf("AI initialization error: %v\n", err)

@@ -122,19 +122,22 @@ func localAiInit(modelPath string) error {
 
 	var r io.ReadSeeker
 	var closeFn func() error
+	var err error
 
-	if dbData := db.AiModelLoad(); len(dbData) > 0 {
-		r = bytes.NewReader(dbData)
-	} else if modelPath != "" {
-		f, err := os.Open(modelPath)
-		if err != nil {
-			return err
+	r, closeFn, err = db.AiModelBlob()
+	if err != nil {
+		if modelPath != "" {
+			f, err := os.Open(modelPath)
+			if err != nil {
+				return err
+			}
+			r = f
+			closeFn = f.Close
+		} else {
+			return fmt.Errorf("no model path specified and no model found in database")
 		}
-		r = f
-		closeFn = f.Close
-	} else {
-		return fmt.Errorf("no model path specified and no model found in database")
 	}
+
 	if closeFn != nil {
 		defer closeFn()
 	}
