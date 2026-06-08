@@ -127,11 +127,37 @@ func NewDBHandler(dbPath string) (*DBHandler, error) {
 
 	opts := sqlitex.PoolOptions{
 		PoolSize: 10,
+		PrepareConn: func(conn *sqlite.Conn) error {
+			var pragmas []string
+			if isReadOnly {
+				pragmas = []string{
+					"PRAGMA query_only = ON",
+					"PRAGMA cache_size = -10000",
+					"PRAGMA mmap_size = 268435456",
+					"PRAGMA temp_store = MEMORY",
+				}
+			} else {
+				pragmas = []string{
+					"PRAGMA synchronous = OFF",
+					"PRAGMA foreign_keys = OFF",
+					"PRAGMA cache_size = -10000",
+					"PRAGMA mmap_size = 268435456",
+					"PRAGMA temp_store = MEMORY",
+				}
+			}
+			for _, pragma := range pragmas {
+				if err := sqlitex.ExecuteTransient(conn, pragma, nil); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
 	}
 	if isReadOnly {
 		opts.Flags = sqlite.OpenReadOnly | sqlite.OpenURI
 	} else {
 		opts.Flags = sqlite.OpenReadWrite | sqlite.OpenCreate | sqlite.OpenURI
+		opts.PoolSize = 1
 	}
 
 	pool, err := sqlitex.NewPool(dbPath, opts)
@@ -233,24 +259,27 @@ func (h *DBHandler) Optimize() error {
 	}
 	defer h.pool.Put(conn)
 
-	var err error
-	deferFn := sqlitex.Transaction(conn)
-	defer deferFn(&err)
-
 	log.Println("Deleting duplicate sections")
-	err = sqlitex.ExecuteTransient(conn, `
-		DELETE FROM sections
-		WHERE id NOT IN (
-			SELECT MAX(id)
-			FROM sections
-			GROUP BY article_id, title
-		)`, nil)
+	err := func() error {
+		var err error
+		deferFn := sqlitex.Transaction(conn)
+		defer deferFn(&err)
+
+		err = sqlitex.Execute(conn, `
+			DELETE FROM sections
+			WHERE id NOT IN (
+				SELECT MAX(id)
+				FROM sections
+				GROUP BY article_id, title
+			)`, nil)
+		return err
+	}()
 	if err != nil {
 		return fmt.Errorf("error deleting duplicate sections: %v", err)
 	}
 
 	log.Println("Running VACUUM")
-	err = sqlitex.ExecuteTransient(conn, "VACUUM", nil)
+	err = sqlitex.Execute(conn, "VACUUM", nil)
 	if err != nil {
 		return fmt.Errorf("error executing VACUUM: %v", err)
 	}
@@ -265,7 +294,7 @@ func (h *DBHandler) SetupPut(key, value string) error {
 	}
 	defer h.pool.Put(conn)
 
-	return sqlitex.ExecuteTransient(conn, "INSERT OR REPLACE INTO setup (key, value) VALUES (?, ?)", &sqlitex.ExecOptions{
+	return sqlitex.Execute(conn, "INSERT OR REPLACE INTO setup (key, value) VALUES (?, ?)", &sqlitex.ExecOptions{
 		Args: []any{key, value},
 	})
 }
@@ -279,7 +308,7 @@ func (h *DBHandler) SetupGet(key string) (string, error) {
 
 	var value string
 	var found bool
-	err := sqlitex.ExecuteTransient(conn, "SELECT value FROM setup WHERE key = ? LIMIT 1", &sqlitex.ExecOptions{
+	err := sqlitex.Execute(conn, "SELECT value FROM setup WHERE key = ? LIMIT 1", &sqlitex.ExecOptions{
 		Args: []any{key},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			value = stmt.ColumnText(0)
@@ -307,7 +336,7 @@ func (h *DBHandler) ArticlePut(article OutputArticle) error {
 	deferFn := sqlitex.Transaction(conn)
 	defer deferFn(&err)
 
-	err = sqlitex.ExecuteTransient(conn, "INSERT OR REPLACE INTO articles (id, title, entity) VALUES (?, ?, ?)", &sqlitex.ExecOptions{
+	err = sqlitex.Execute(conn, "INSERT OR REPLACE INTO articles (id, title, entity) VALUES (?, ?, ?)", &sqlitex.ExecOptions{
 		Args: []any{article.ID, article.Title, article.Entity},
 	})
 	if err != nil {
@@ -319,7 +348,7 @@ func (h *DBHandler) ArticlePut(article OutputArticle) error {
 		pow, _ := item["pow"].(int)
 		content, _ := item["content"].(string)
 
-		err = sqlitex.ExecuteTransient(conn, "INSERT INTO sections (article_id, title, content, pow) VALUES (?, ?, ?, ?)", &sqlitex.ExecOptions{
+		err = sqlitex.Execute(conn, "INSERT INTO sections (article_id, title, content, pow) VALUES (?, ?, ?, ?)", &sqlitex.ExecOptions{
 			Args: []any{article.ID, title, content, pow},
 		})
 		if err != nil {
@@ -360,7 +389,7 @@ func (h *DBHandler) ArticleGet(articleID int) (ArticleResult, error) {
 	`
 
 	var isFirstRow = true
-	err := sqlitex.ExecuteTransient(conn, sqlQuery, &sqlitex.ExecOptions{
+	err := sqlitex.Execute(conn, sqlQuery, &sqlitex.ExecOptions{
 		Args: []any{articleID},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			var (
@@ -382,7 +411,7 @@ func (h *DBHandler) ArticleGet(articleID int) (ArticleResult, error) {
 				section.Content = sectionContent
 			} else {
 				var contentFlate []byte
-				err := sqlitex.ExecuteTransient(conn, "SELECT content_flate FROM sections WHERE id = ?", &sqlitex.ExecOptions{
+				err := sqlitex.Execute(conn, "SELECT content_flate FROM sections WHERE id = ?", &sqlitex.ExecOptions{
 					Args: []any{section.ID},
 					ResultFunc: func(subStmt *sqlite.Stmt) error {
 						contentFlate = make([]byte, subStmt.ColumnLen(0))
@@ -427,12 +456,8 @@ func (h *DBHandler) Compress() error {
 	}
 	defer h.pool.Put(conn)
 
-	var err error
-	deferFn := sqlitex.Transaction(conn)
-	defer deferFn(&err)
-
 	var totalSections int
-	err = sqlitex.ExecuteTransient(conn, "SELECT COUNT(*) FROM sections WHERE content IS NOT NULL AND content != ''", &sqlitex.ExecOptions{
+	err := sqlitex.Execute(conn, "SELECT COUNT(*) FROM sections WHERE content IS NOT NULL AND content != ''", &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			totalSections = int(stmt.ColumnInt64(0))
 			return nil
@@ -450,7 +475,7 @@ func (h *DBHandler) Compress() error {
 	}
 	var sections []section
 
-	err = sqlitex.ExecuteTransient(conn, "SELECT id, content FROM sections WHERE content IS NOT NULL AND content != ''", &sqlitex.ExecOptions{
+	err = sqlitex.Execute(conn, "SELECT id, content FROM sections WHERE content IS NOT NULL AND content != ''", &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			sections = append(sections, section{
 				id:      int(stmt.ColumnInt64(0)),
@@ -468,39 +493,49 @@ func (h *DBHandler) Compress() error {
 	var lastLogTime time.Time
 	batchStartTime := time.Now()
 
-	for _, s := range sections {
-		if s.content != "" {
-			compressedContent, err := TextDeflate(s.content)
-			if err != nil {
-				return fmt.Errorf("error compressing section content: %v", err)
-			}
+	err = func() error {
+		var err error
+		deferFn := sqlitex.Transaction(conn)
+		defer deferFn(&err)
 
-			if len(compressedContent) < len(s.content) {
-				err = sqlitex.ExecuteTransient(conn, "UPDATE sections SET content_flate = ?, content = NULL WHERE id = ?", &sqlitex.ExecOptions{
-					Args: []any{compressedContent, s.id},
-				})
+		for _, s := range sections {
+			if s.content != "" {
+				compressedContent, err := TextDeflate(s.content)
 				if err != nil {
-					return fmt.Errorf("error updating section with compressed content: %v", err)
+					return fmt.Errorf("error compressing section content: %v", err)
 				}
-				compressed++
+
+				if len(compressedContent) < len(s.content) {
+					err = sqlitex.Execute(conn, "UPDATE sections SET content_flate = ?, content = NULL WHERE id = ?", &sqlitex.ExecOptions{
+						Args: []any{compressedContent, s.id},
+					})
+					if err != nil {
+						return fmt.Errorf("error updating section with compressed content: %v", err)
+					}
+					compressed++
+				}
+			}
+
+			processed++
+
+			now := time.Now()
+			if processed%10000 == 0 || now.Sub(lastLogTime) >= 5*time.Second {
+				progress := (float64(processed) / float64(totalSections) * 100)
+				elapsed := time.Since(batchStartTime)
+				estimatedTotal := time.Duration(float64(processed) / float64(totalSections))
+				remaining := estimatedTotal - elapsed
+				log.Printf("Compression progress: %.2f%% - ETA: %v", progress, remaining.Round(time.Second))
+				lastLogTime = now
 			}
 		}
-
-		processed++
-
-		now := time.Now()
-		if processed%10000 == 0 || now.Sub(lastLogTime) >= 5*time.Second {
-			progress := (float64(processed) / float64(totalSections) * 100)
-			elapsed := time.Since(batchStartTime)
-			estimatedTotal := time.Duration(float64(processed) / float64(totalSections))
-			remaining := estimatedTotal - elapsed
-			log.Printf("Compression progress: %.2f%% - ETA: %v", progress, remaining.Round(time.Second))
-			lastLogTime = now
-		}
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
 
 	log.Printf("Compression ready, running VACUUM...")
-	err = sqlitex.ExecuteTransient(conn, "VACUUM", nil)
+	err = sqlitex.Execute(conn, "VACUUM", nil)
 	if err != nil {
 		return fmt.Errorf("error executing VACUUM: %v", err)
 	}

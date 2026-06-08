@@ -20,7 +20,7 @@ func (h *DBHandler) ProcessTitles() error {
 	}
 	defer h.pool.Put(conn)
 
-	err := sqlitex.ExecuteTransient(conn, "INSERT INTO article_search(rowid, title) SELECT id, title FROM articles", nil)
+	err := sqlitex.Execute(conn, "INSERT INTO article_search(rowid, title) SELECT id, title FROM articles", nil)
 	if err != nil {
 		return fmt.Errorf("error populating article_search table: %v", err)
 	}
@@ -35,7 +35,7 @@ func (h *DBHandler) ProcessContents() error {
 	}
 	defer h.pool.Put(conn)
 
-	err := sqlitex.ExecuteTransient(conn, "INSERT INTO section_search(rowid, title, content) SELECT id, title, content FROM sections", nil)
+	err := sqlitex.Execute(conn, "INSERT INTO section_search(rowid, title, content) SELECT id, title, content FROM sections", nil)
 	if err != nil {
 		return fmt.Errorf("error populating section_search table: %v", err)
 	}
@@ -50,12 +50,12 @@ func (h *DBHandler) ProcessVocabulary() error {
 	}
 	defer h.pool.Put(conn)
 
-	err := sqlitex.ExecuteTransient(conn, "INSERT OR IGNORE INTO vocabulary SELECT term FROM article_search_vocabulary", nil)
+	err := sqlitex.Execute(conn, "INSERT OR IGNORE INTO vocabulary SELECT term FROM article_search_vocabulary", nil)
 	if err != nil {
 		return fmt.Errorf("error populating vocabulary table: %v", err)
 	}
 
-	err = sqlitex.ExecuteTransient(conn, "INSERT OR IGNORE INTO vocabulary SELECT term FROM section_search_vocabulary", nil)
+	err = sqlitex.Execute(conn, "INSERT OR IGNORE INTO vocabulary SELECT term FROM section_search_vocabulary", nil)
 	if err != nil {
 		return fmt.Errorf("error populating vocabulary table: %v", err)
 	}
@@ -89,7 +89,7 @@ func (h *DBHandler) ProcessEmbeddings() (err error) {
 	defer h.pool.Put(conn)
 
 	var pendingSectionIDs []int
-	err = sqlitex.ExecuteTransient(conn, `
+	err = sqlitex.Execute(conn, `
 		SELECT s.id 
 		FROM sections s 
 		WHERE s.id NOT IN (SELECT id FROM vectors)
@@ -147,7 +147,7 @@ func (h *DBHandler) ProcessEmbeddings() (err error) {
 			}
 			var sections []sectionData
 
-			err = sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
+			err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
 				Args: args,
 				ResultFunc: func(stmt *sqlite.Stmt) error {
 					sections = append(sections, sectionData{
@@ -172,7 +172,7 @@ func (h *DBHandler) ProcessEmbeddings() (err error) {
 					continue
 				}
 
-				err = sqlitex.ExecuteTransient(conn, "INSERT OR REPLACE INTO vectors (id, embedding) VALUES (?, ?)", &sqlitex.ExecOptions{
+				err = sqlitex.Execute(conn, "INSERT OR REPLACE INTO vectors (id, embedding) VALUES (?, ?)", &sqlitex.ExecOptions{
 					Args: []any{s.id, Float32ToBytes(embedding)},
 				})
 				if err != nil {
@@ -242,7 +242,7 @@ func (h *DBHandler) ProcessANN() error {
 	defer h.pool.Put(conn)
 
 	var pendingVectorIDs []int
-	err := sqlitex.ExecuteTransient(conn, `
+	err := sqlitex.Execute(conn, `
         SELECT v.id 
         FROM vectors v 
         WHERE v.id NOT IN (SELECT vectors_id FROM vectors_ann_index)
@@ -296,7 +296,7 @@ func (h *DBHandler) ProcessANN() error {
 			}
 			var vectors []vectorData
 
-			err = sqlitex.ExecuteTransient(conn, query, &sqlitex.ExecOptions{
+			err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
 				Args: args,
 				ResultFunc: func(stmt *sqlite.Stmt) error {
 					embBytes := make([]byte, stmt.ColumnLen(1))
@@ -313,7 +313,7 @@ func (h *DBHandler) ProcessANN() error {
 			}
 
 			var annChunkID int
-			err = sqlitex.ExecuteTransient(conn, "SELECT COALESCE(MAX(id), 0) + 1 FROM vectors_ann_chunks", &sqlitex.ExecOptions{
+			err = sqlitex.Execute(conn, "SELECT COALESCE(MAX(id), 0) + 1 FROM vectors_ann_chunks", &sqlitex.ExecOptions{
 				ResultFunc: func(stmt *sqlite.Stmt) error {
 					annChunkID = int(stmt.ColumnInt64(0))
 					return nil
@@ -336,7 +336,7 @@ func (h *DBHandler) ProcessANN() error {
 					annData = QuantizeBinary(embedding)
 				}
 
-				err = sqlitex.ExecuteTransient(conn, "INSERT INTO vectors_ann_index (vectors_id, chunk_id, chunk_position) VALUES (?, ?, ?)", &sqlitex.ExecOptions{
+				err = sqlitex.Execute(conn, "INSERT INTO vectors_ann_index (vectors_id, chunk_id, chunk_position) VALUES (?, ?, ?)", &sqlitex.ExecOptions{
 					Args: []any{v.id, annChunkID, i},
 				})
 				if err != nil {
@@ -346,7 +346,7 @@ func (h *DBHandler) ProcessANN() error {
 				annChunkData = append(annChunkData, annData...)
 			}
 
-			err = sqlitex.ExecuteTransient(conn, "INSERT INTO vectors_ann_chunks (id, chunk) VALUES (?, ?)", &sqlitex.ExecOptions{
+			err = sqlitex.Execute(conn, "INSERT INTO vectors_ann_chunks (id, chunk) VALUES (?, ?)", &sqlitex.ExecOptions{
 				Args: []any{annChunkID, annChunkData},
 			})
 			if err != nil {
