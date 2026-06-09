@@ -8,7 +8,7 @@ Wikilite is a self-contained tool for creating a local SQLite database of Wikipe
 * **Optional Semantic Search**: Implements ANN quantization and MRL (Matryoshka Representation Learning) with text embeddings to find semantically similar content, effectively handling misspellings, morphological variations, and synonymy.
 * **Flexible Embedding Options**: Supports native Qwen3 embedding generation directly in pure Go. Alternatively, can delegate embedding generation to external OpenAI-compatible APIs.
 * **Cross-Platform**: Available for Linux, macOS, Windows, and as a native Android application.
-* **Minimal Deployment**: Requires only the Wikilite executable and the database file on POSIX platforms.
+* **Minimal Deployment**: Requires only the Wikilite executable and the database file.
 * **Offline Operation**: Complete functionality without internet connectivity.
 * **Multiple Interfaces**: Command-line interface for terminal usage, web interface for browser-based access, and a Model Context Protocol (MCP) server for integration with AI assistants and LLM environments.
 * **Interactive Wizard**: When started without command-line options, Wikilite enters an interactive mode that guides users through database setup and search operations.
@@ -24,6 +24,7 @@ Wikilite is a self-contained tool for creating a local SQLite database of Wikipe
 Pre-compiled binaries for Linux, macOS, and Windows are available in the [latest release](https://github.com/eja/wikilite/releases/latest).
 
 A native [Android application](https://github.com/eja/wikilite/releases/latest/download/wikilite-android.apk) is also available in the releases.
+*   **Memory Requirements**: A minimum of 3 GB of free RAM is required to use the semantic search database on Android.
 *   **External Storage Support**: If a `wikilite.db` file is already present in the external SD card, the Android app will detect and use it directly.
 *   **In-App Download**: If no database is found on launch, the app provides an option to download a pre-built database.
 
