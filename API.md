@@ -1,10 +1,15 @@
 # WikiLite API Documentation
 
 ## Base URL
+Standard REST API:
 ```
 http://{host}:{port}/api
 ```
-Default: `http://localhost:35248/api`
+Model Context Protocol (MCP) Endpoint:
+```
+http://{host}:{port}/mcp
+```
+Default Host/Port: `http://localhost:35248`
 
 ## API Endpoints
 
@@ -155,7 +160,6 @@ Content-Type: application/json
 }
 ```
 
-
 ### 6. Get Article
 Retrieves a complete article by ID.
 
@@ -193,14 +197,112 @@ Content-Type: application/json
       {
         "id": 1234,
         "title": "History",
-        "content": "Linux was created in 1991...",
+        "content": "Linux was created in 1991..."
       },
       {
         "id": 12345,
         "title": "Design Philosophy",
-        "content": "Linux follows Unix philosophy...",
+        "content": "Linux follows Unix philosophy..."
       }
     ]
+  }
+}
+```
+
+### 7. Model Context Protocol (MCP)
+Provides bidirectional communication over Server-Sent Events (SSE) and Streamable HTTP for integrating with compatible AI applications and development tools.
+
+**Endpoint:** `/mcp`  
+**Methods:** GET, POST
+
+#### Parameters
+- `session_id` (required for non-initialization requests): Unique session identifier, passed either via the `Mcp-Session-Id` header or the `session_id` query parameter.
+
+#### GET Request (SSE Connection)
+Used to establish the stateful, unidirectional server-to-client stream.
+```
+GET /mcp?session_id=a1b2c3d4e5f6
+```
+
+#### POST Request (JSON-RPC Handshake)
+Establishes the initial connection. Does not require a session ID header.
+```json
+POST /mcp
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {},
+    "clientInfo": {
+      "name": "example-client",
+      "version": "1.0.0"
+    }
+  }
+}
+```
+
+#### Response
+Returns `200 OK` alongside the assigned session ID inside the `Mcp-Session-Id` header.
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {
+      "tools": {
+        "listChanged": false
+      },
+      "prompts": {
+        "listChanged": false
+      }
+    },
+    "serverInfo": {
+      "name": "wikilite",
+      "version": "1.6.9"
+    }
+  }
+}
+```
+
+#### POST Request (Tool Call Example)
+Executes a tool on the server. Requires the returned `Mcp-Session-Id` header.
+```json
+POST /mcp
+Mcp-Session-Id: a1b2c3d4e5f6
+Content-Type: application/json
+
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "search",
+    "arguments": {
+      "query": "linux",
+      "limit": 1
+    }
+  }
+}
+```
+
+#### Response
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Search results for 'linux' (limit 1):\n\n1. **Linux** (Article ID: 123)\n   Match Score: 100.00%\n   Snippet: Linux was created in 1991...\n\n"
+      }
+    ],
+    "isError": false
   }
 }
 ```
@@ -258,18 +360,24 @@ curl -X POST http://localhost:35248/api/search/title \
 curl 'http://localhost:35248/api/article?id=123'
 ```
 
+4. Initialize MCP Session Handshake:
+```bash
+curl -X POST http://localhost:35248/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}}}'
+```
+
 ## Configuration Requirements
 
-### Sematic Search
+### Semantic Search
 To use semantic search, you have two options:
 1. **Remote Server**:  
   You can pass the remote server URL using the `--ai-api-url` flag. This allows the system to connect to a remote server where the vector search functionality is hosted.
 2. **Local Model**:
-  Alternatively, you can use a local GGUF model file. The model file must have the same name as the AI model (`--ai-model`) with `.gguf` extension. The file should be located in the same directory as the executable or as stated by `--ai-model-path`.
+  Alternatively, local semantic search execution can be performed using the GGUF model embedded into the database. Only the qwen3-embeddings-q8.0 format is supported for querying, and it cannot be used for database indexing or embedding processing.
 
 ## Notes
 - All search endpoints support both GET and POST methods
 - The `limit` parameter is shared across all search types
 - Semantic search requires additional configuration and services
 - Results are deduplicated across search types in combined search
-
