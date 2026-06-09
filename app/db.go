@@ -366,6 +366,8 @@ func (h *DBHandler) ArticleGet(articleID int) (ArticleResult, error) {
 	}
 	defer h.pool.Put(conn)
 
+	start := time.Now()
+
 	article := ArticleResult{
 		Sections: []ArticleResultSection{},
 	}
@@ -445,6 +447,8 @@ func (h *DBHandler) ArticleGet(articleID int) (ArticleResult, error) {
 	if article.ID == 0 {
 		return article, fmt.Errorf("article not found")
 	}
+
+	log.Printf("Article retrieve: %d (%v)", articleID, time.Since(start))
 
 	return article, nil
 }

@@ -261,6 +261,7 @@ func (s *WebServer) Start(host string, port int) error {
 	mux.HandleFunc("/api/search/semantic", s.handleAPISearchSemantic)
 	mux.HandleFunc("/api/search/distance", s.handleAPISearchWordDistance)
 	mux.HandleFunc("/api/article", s.handleAPIArticle)
+	mux.HandleFunc("/mcp", s.handleMCP)
 
 	subFS, err := fs.Sub(assets, "assets/static")
 	if err != nil {
