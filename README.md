@@ -10,7 +10,7 @@ Wikilite is a self-contained tool for creating a local SQLite database of Wikipe
 * **Cross-Platform**: Available for Linux, macOS, Windows, and as a native Android application.
 * **Minimal Deployment**: Requires only the Wikilite executable and the database file on POSIX platforms.
 * **Offline Operation**: Complete functionality without internet connectivity.
-* **Dual Interfaces**: Command-line interface for terminal usage and web interface for browser-based access.
+* **Multiple Interfaces**: Command-line interface for terminal usage, web interface for browser-based access, and a Model Context Protocol (MCP) server for integration with AI assistants and LLM environments.
 * **Interactive Wizard**: When started without command-line options, Wikilite enters an interactive mode that guides users through database setup and search operations.
 
 ## Installation
@@ -42,11 +42,11 @@ This launches a wizard that guides you through database installation, CLI search
 ./wikilite --cli --db <file.db>
 ```
 
-**Web Interface Only**:
+**Web Interface & MCP Server**:
 ```bash
 ./wikilite --web --db <file.db>
 ```
-Access the interface at `http://localhost:35248`
+Access the search interface at `http://localhost:35248` or connect an MCP client to `http://localhost:35248/mcp`.
 
 ## API Documentation
 
@@ -58,8 +58,20 @@ Wikilite provides a comprehensive RESTful API supporting both GET and POST metho
 * `/api/search/semantic`: Vector-based semantic search
 * `/api/search/distance`: Vocabulary distance search
 * `/api/article`: Article retrieval by ID
+* `/mcp`: Model Context Protocol (MCP) server endpoint for SSE and Streamable HTTP JSON-RPC communication
 
 All search endpoints support pagination via the `limit` parameter and return consistent JSON formatting. Complete API documentation is available in the [API specification](API.md).
+
+## Model Context Protocol (MCP)
+
+Wikilite operates as an MCP server over Server-Sent Events (SSE) and Streamable HTTP via the `/mcp` endpoint. This allows compatible AI applications and development tools to directly query the database and fetch articles.
+The server exposes the following tools:
+
+* **`search`**: Queries the local Wikipedia database using lexical or semantic options and returns a list of matching articles with matching scores and snippets.
+* **`get_article`**: Retrieves the full body text and sections of a Wikipedia article by its integer ID.
+
+To connect an MCP-compatible client, configure it to connect to the active server endpoint:
+`http://localhost:35248/mcp`
 
 ## Semantic Search Implementation
 
