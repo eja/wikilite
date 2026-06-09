@@ -20,11 +20,11 @@ jobs:
           - goos: linux
             goarch: amd64
             os: ubuntu-latest
-            cgo: 1
+            cgo: 0
           - goos: linux
             goarch: arm64
             os: ubuntu-24.04-arm
-            cgo: 1
+            cgo: 0
           - goos: linux
             goarch: arm
             goarm: 7
@@ -33,7 +33,7 @@ jobs:
           - goos: windows
             goarch: amd64
             os: windows-latest
-            cgo: 1
+            cgo: 0
           - goos: windows
             goarch: arm64
             os: ubuntu-latest
@@ -41,11 +41,11 @@ jobs:
           - goos: darwin
             goarch: amd64
             os: macos-15-intel
-            cgo: 1
+            cgo: 0
           - goos: darwin
             goarch: arm64
             os: macos-latest
-            cgo: 1
+            cgo: 0
 
     steps:
       - uses: actions/checkout@v4
@@ -74,11 +74,11 @@ jobs:
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
           
           LDFLAGS="-s -w"
-          if [ "$CGO_ENABLED" = "1" ] && { [ "$GOOS" = "linux" ] || [ "$GOOS" = "windows" ]; }; then
+          if { [ "$GOOS" = "linux" ] }; then
             LDFLAGS="-s -w -extldflags -static"
           fi
           
-          go build -tags "fts5" -ldflags="$LDFLAGS" -o dist/${{ env.APP }}${EXT} ./app
+          go build -ldflags="$LDFLAGS" -o dist/${{ env.APP }}${EXT} ./app
 
       - name: Archive
         shell: bash
