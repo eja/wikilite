@@ -126,6 +126,84 @@ func matMul(a, b []float32, rows, in, out int) []float32 {
 	return res
 }
 
+func matMulQuant(a []float32, b Tensor, rows, in, out int) []float32 {
+	if b.Type == 0 {
+		return matMul(a, b.F32, rows, in, out)
+	}
+
+	res := make([]float32, rows*out)
+	numWorkers := min(runtime.NumCPU(), rows)
+	var wg sync.WaitGroup
+	wg.Add(numWorkers)
+	rowsPerWorker := (rows + numWorkers - 1) / numWorkers
+
+	for w := range numWorkers {
+		go func(workerID int) {
+			defer wg.Done()
+			rStart := workerID * rowsPerWorker
+			rEnd := min(rStart+rowsPerWorker, rows)
+
+			for i := rStart; i < rEnd; i++ {
+				aRow := a[i*in : (i+1)*in]
+				resRow := res[i*out : (i+1)*out]
+
+				for j := 0; j < out; j++ {
+					blockStart := (j * in) / 32
+					numBlocks := in / 32
+					bBlocks := b.Q8[blockStart : blockStart+numBlocks]
+
+					var rowSum float32
+					for blockIdx := range numBlocks {
+						block := bBlocks[blockIdx]
+						aOff := blockIdx * 32
+
+						_ = aRow[aOff+31]
+
+						var blockSum float32
+						blockSum += aRow[aOff+0] * float32(block.Q[0])
+						blockSum += aRow[aOff+1] * float32(block.Q[1])
+						blockSum += aRow[aOff+2] * float32(block.Q[2])
+						blockSum += aRow[aOff+3] * float32(block.Q[3])
+						blockSum += aRow[aOff+4] * float32(block.Q[4])
+						blockSum += aRow[aOff+5] * float32(block.Q[5])
+						blockSum += aRow[aOff+6] * float32(block.Q[6])
+						blockSum += aRow[aOff+7] * float32(block.Q[7])
+						blockSum += aRow[aOff+8] * float32(block.Q[8])
+						blockSum += aRow[aOff+9] * float32(block.Q[9])
+						blockSum += aRow[aOff+10] * float32(block.Q[10])
+						blockSum += aRow[aOff+11] * float32(block.Q[11])
+						blockSum += aRow[aOff+12] * float32(block.Q[12])
+						blockSum += aRow[aOff+13] * float32(block.Q[13])
+						blockSum += aRow[aOff+14] * float32(block.Q[14])
+						blockSum += aRow[aOff+15] * float32(block.Q[15])
+						blockSum += aRow[aOff+16] * float32(block.Q[16])
+						blockSum += aRow[aOff+17] * float32(block.Q[17])
+						blockSum += aRow[aOff+18] * float32(block.Q[18])
+						blockSum += aRow[aOff+19] * float32(block.Q[19])
+						blockSum += aRow[aOff+20] * float32(block.Q[20])
+						blockSum += aRow[aOff+21] * float32(block.Q[21])
+						blockSum += aRow[aOff+22] * float32(block.Q[22])
+						blockSum += aRow[aOff+23] * float32(block.Q[23])
+						blockSum += aRow[aOff+24] * float32(block.Q[24])
+						blockSum += aRow[aOff+25] * float32(block.Q[25])
+						blockSum += aRow[aOff+26] * float32(block.Q[26])
+						blockSum += aRow[aOff+27] * float32(block.Q[27])
+						blockSum += aRow[aOff+28] * float32(block.Q[28])
+						blockSum += aRow[aOff+29] * float32(block.Q[29])
+						blockSum += aRow[aOff+30] * float32(block.Q[30])
+						blockSum += aRow[aOff+31] * float32(block.Q[31])
+
+						rowSum += blockSum * block.D
+					}
+					resRow[j] = rowSum
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	return res
+}
+
 func rmsNormRows(x, weight []float32, seqLen int) []float32 {
 	H := cfgHiddenSize
 	out := make([]float32, seqLen*H)

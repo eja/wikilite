@@ -26,19 +26,19 @@ type qwen3Model struct {
 
 type qwen3Layer struct {
 	inputNorm []float32
-	qProj     []float32
+	qProj     Tensor
 	qBias     []float32
-	kProj     []float32
+	kProj     Tensor
 	kBias     []float32
-	vProj     []float32
+	vProj     Tensor
 	vBias     []float32
-	oProj     []float32
+	oProj     Tensor
 	qNorm     []float32
 	kNorm     []float32
 	postNorm  []float32
-	gateProj  []float32
-	upProj    []float32
-	downProj  []float32
+	gateProj  Tensor
+	upProj    Tensor
+	downProj  Tensor
 }
 
 func loadModel(p *GGUFParser) (*qwen3Model, error) {
@@ -51,8 +51,13 @@ func loadModel(p *GGUFParser) (*qwen3Model, error) {
 		return nil, fmt.Errorf("invalid architecture metadata type")
 	}
 
-	if arch != "qwen2" && arch != "qwen3" && arch != "llama" {
-		return nil, fmt.Errorf("unsupported GGUF architecture: %q (only qwen and llama architectures are supported)", arch)
+	if arch != "qwen2" && arch != "qwen3" {
+		return nil, fmt.Errorf("local execution only supports Qwen3 models")
+	}
+
+	tInfo, ok := p.Tensors["blk.0.attn_q.weight"]
+	if !ok || tInfo.Type != 8 {
+		return nil, fmt.Errorf("local execution only supports Q8.0 format")
 	}
 
 	getUint32 := func(suffix string, fallback int) int {
@@ -110,19 +115,22 @@ func loadModel(p *GGUFParser) (*qwen3Model, error) {
 	m := &qwen3Model{layers: make([]qwen3Layer, cfgNumLayers)}
 
 	var err error
-	if m.embedTokens, err = p.GetTensor("token_embd.weight"); err != nil {
+
+	if m.embedTokens, err = p.GetTensorF32("token_embd.weight"); err != nil {
 		return nil, err
 	}
-	if m.normWeight, err = p.GetTensor("output_norm.weight"); err != nil {
+
+	if m.normWeight, err = p.GetTensorF32("output_norm.weight"); err != nil {
 		return nil, err
 	}
 
 	for i := range m.layers {
 		lw := &m.layers[i]
 
-		if lw.inputNorm, err = p.GetTensor(fmt.Sprintf("blk.%d.attn_norm.weight", i)); err != nil {
+		if lw.inputNorm, err = p.GetTensorF32(fmt.Sprintf("blk.%d.attn_norm.weight", i)); err != nil {
 			return nil, err
 		}
+
 		if lw.qProj, err = p.GetTensor(fmt.Sprintf("blk.%d.attn_q.weight", i)); err != nil {
 			return nil, err
 		}
@@ -136,12 +144,17 @@ func loadModel(p *GGUFParser) (*qwen3Model, error) {
 			return nil, err
 		}
 
-		lw.qNorm, _ = p.GetTensor(fmt.Sprintf("blk.%d.attn_q_norm.weight", i))
-		lw.kNorm, _ = p.GetTensor(fmt.Sprintf("blk.%d.attn_k_norm.weight", i))
+		if lw.qNorm, err = p.GetTensorF32(fmt.Sprintf("blk.%d.attn_q_norm.weight", i)); err != nil {
+			lw.qNorm = nil
+		}
+		if lw.kNorm, err = p.GetTensorF32(fmt.Sprintf("blk.%d.attn_k_norm.weight", i)); err != nil {
+			lw.kNorm = nil
+		}
 
-		if lw.postNorm, err = p.GetTensor(fmt.Sprintf("blk.%d.ffn_norm.weight", i)); err != nil {
+		if lw.postNorm, err = p.GetTensorF32(fmt.Sprintf("blk.%d.ffn_norm.weight", i)); err != nil {
 			return nil, err
 		}
+
 		if lw.gateProj, err = p.GetTensor(fmt.Sprintf("blk.%d.ffn_gate.weight", i)); err != nil {
 			return nil, err
 		}
@@ -152,9 +165,15 @@ func loadModel(p *GGUFParser) (*qwen3Model, error) {
 			return nil, err
 		}
 
-		lw.qBias, _ = p.GetTensor(fmt.Sprintf("blk.%d.attn_q.bias", i))
-		lw.kBias, _ = p.GetTensor(fmt.Sprintf("blk.%d.attn_k.bias", i))
-		lw.vBias, _ = p.GetTensor(fmt.Sprintf("blk.%d.attn_v.bias", i))
+		if lw.qBias, err = p.GetTensorF32(fmt.Sprintf("blk.%d.attn_q.bias", i)); err != nil {
+			lw.qBias = nil
+		}
+		if lw.kBias, err = p.GetTensorF32(fmt.Sprintf("blk.%d.attn_k.bias", i)); err != nil {
+			lw.kBias = nil
+		}
+		if lw.vBias, err = p.GetTensorF32(fmt.Sprintf("blk.%d.attn_v.bias", i)); err != nil {
+			lw.vBias = nil
+		}
 	}
 
 	return m, nil
@@ -194,11 +213,11 @@ func selfAttention(x []float32, lw *qwen3Layer, ropeCache []float32, seqLen int)
 	nKV := cfgNumKVHeads
 	hDim := cfgHeadDim
 
-	q := matMul(x, lw.qProj, seqLen, H, nH*hDim)
+	q := matMulQuant(x, lw.qProj, seqLen, H, nH*hDim)
 	addBias(q, lw.qBias, seqLen, nH*hDim)
-	k := matMul(x, lw.kProj, seqLen, H, nKV*hDim)
+	k := matMulQuant(x, lw.kProj, seqLen, H, nKV*hDim)
 	addBias(k, lw.kBias, seqLen, nKV*hDim)
-	v := matMul(x, lw.vProj, seqLen, H, nKV*hDim)
+	v := matMulQuant(x, lw.vProj, seqLen, H, nKV*hDim)
 	addBias(v, lw.vBias, seqLen, nKV*hDim)
 
 	rmsNormHeads(q, lw.qNorm, seqLen, nH, hDim)
@@ -208,16 +227,16 @@ func selfAttention(x []float32, lw *qwen3Layer, ropeCache []float32, seqLen int)
 	applyRoPE(k, ropeCache, seqLen, nKV, hDim)
 
 	attnOut := gqa(q, k, v, seqLen)
-	return matMul(attnOut, lw.oProj, seqLen, nH*hDim, H)
+	return matMulQuant(attnOut, lw.oProj, seqLen, nH*hDim, H)
 }
 
 func swigluMLP(x []float32, lw *qwen3Layer, seqLen int) []float32 {
 	H := cfgHiddenSize
 	I := cfgIntermediateSize
-	gate := matMul(x, lw.gateProj, seqLen, H, I)
-	up := matMul(x, lw.upProj, seqLen, H, I)
+	gate := matMulQuant(x, lw.gateProj, seqLen, H, I)
+	up := matMulQuant(x, lw.upProj, seqLen, H, I)
 	for i := range gate {
 		gate[i] = silu(gate[i]) * up[i]
 	}
-	return matMul(gate, lw.downProj, seqLen, I, H)
+	return matMulQuant(gate, lw.downProj, seqLen, I, H)
 }

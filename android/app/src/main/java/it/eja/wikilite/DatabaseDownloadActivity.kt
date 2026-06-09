@@ -126,7 +126,7 @@ class DatabaseDownloadActivity : AppCompatActivity() {
     private fun loadFilesFromHuggingFace(): List<String> {
         val files = mutableListOf<String>()
         val availMemGB = getAvailableMemoryGB()
-        val restrictToLexical = availMemGB <= 2.5
+        val restrictToLexical = availMemGB <= 3.0
 
         if (restrictToLexical) {
             runOnUiThread {

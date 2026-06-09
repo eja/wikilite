@@ -31,6 +31,19 @@ func normalizeBM25(score float64) float64 {
 	return (1.0 - math.Exp(-c*rawScore)) * 100.0
 }
 
+func sanitizeFTSQuery(query string) string {
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return ""
+	}
+	var sanitized []string
+	for _, w := range words {
+		clean := strings.ReplaceAll(w, `"`, `""`)
+		sanitized = append(sanitized, `"`+clean+`"`)
+	}
+	return strings.Join(sanitized, " ")
+}
+
 func (h *DBHandler) SearchTitle(searchQuery string, limit int) ([]SearchResult, error) {
 	conn := h.pool.Get(context.Background())
 	if conn == nil {
@@ -51,9 +64,10 @@ func (h *DBHandler) SearchTitle(searchQuery string, limit int) ([]SearchResult, 
 		LIMIT ?
 	`
 
+	sanitized := sanitizeFTSQuery(searchQuery)
 	var results []SearchResult
 	err := sqlitex.ExecuteTransient(conn, sqlQuery, &sqlitex.ExecOptions{
-		Args: []any{searchQuery, limit},
+		Args: []any{sanitized, limit},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			var result SearchResult
 			result.ArticleID = int(stmt.ColumnInt64(0))
@@ -113,9 +127,10 @@ func (h *DBHandler) SearchContent(searchQuery string, limit int) ([]SearchResult
 		LIMIT ?
 	`
 
+	sanitized := sanitizeFTSQuery(searchQuery)
 	var results []SearchResult
 	err := sqlitex.ExecuteTransient(conn, sqlQuery, &sqlitex.ExecOptions{
-		Args: []any{searchQuery, limit},
+		Args: []any{sanitized, limit},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			var result SearchResult
 			result.ArticleID = int(stmt.ColumnInt64(0))

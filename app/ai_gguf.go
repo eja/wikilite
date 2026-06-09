@@ -25,6 +25,17 @@ const (
 	GGUFTypeFloat64 uint32 = 12
 )
 
+type BlockQ8_0 struct {
+	D float32
+	Q [32]int8
+}
+
+type Tensor struct {
+	Type uint32
+	F32  []float32
+	Q8   []BlockQ8_0
+}
+
 type GGUFHeader struct {
 	Magic           [4]byte
 	Version         uint32
@@ -241,7 +252,84 @@ func (p *GGUFParser) readValue(valType uint32) (any, error) {
 	}
 }
 
-func (p *GGUFParser) GetTensor(name string) ([]float32, error) {
+func (p *GGUFParser) GetTensor(name string) (Tensor, error) {
+	tInfo, ok := p.Tensors[name]
+	if !ok {
+		return Tensor{}, fmt.Errorf("tensor %s not found", name)
+	}
+
+	size := uint64(1)
+	for _, dim := range tInfo.Dimensions {
+		size *= dim
+	}
+
+	_, err := p.r.Seek(p.DataStart+int64(tInfo.Offset), io.SeekStart)
+	if err != nil {
+		return Tensor{}, err
+	}
+
+	if tInfo.Type == 0 {
+		buf := make([]byte, size*4)
+		if _, err := io.ReadFull(p.r, buf); err != nil {
+			return Tensor{}, err
+		}
+		out := make([]float32, size)
+		for i := range out {
+			bits := binary.LittleEndian.Uint32(buf[i*4:])
+			out[i] = math.Float32frombits(bits)
+		}
+		return Tensor{Type: 0, F32: out}, nil
+	}
+
+	if tInfo.Type == 1 {
+		buf := make([]byte, size*2)
+		if _, err := io.ReadFull(p.r, buf); err != nil {
+			return Tensor{}, err
+		}
+		out := make([]float32, size)
+		for i := range out {
+			h := binary.LittleEndian.Uint16(buf[i*2:])
+			out[i] = f16ToF32(h)
+		}
+		return Tensor{Type: 0, F32: out}, nil
+	}
+
+	if tInfo.Type == 30 {
+		buf := make([]byte, size*2)
+		if _, err := io.ReadFull(p.r, buf); err != nil {
+			return Tensor{}, err
+		}
+		out := make([]float32, size)
+		for i := range out {
+			u16 := binary.LittleEndian.Uint16(buf[i*2:])
+			out[i] = math.Float32frombits(uint32(u16) << 16)
+		}
+		return Tensor{Type: 0, F32: out}, nil
+	}
+
+	if tInfo.Type == 8 {
+		numBlocks := (size + 31) / 32
+		buf := make([]byte, numBlocks*34)
+		if _, err := io.ReadFull(p.r, buf); err != nil {
+			return Tensor{}, err
+		}
+
+		q8Blocks := make([]BlockQ8_0, numBlocks)
+		for j := uint64(0); j < numBlocks; j++ {
+			blockOff := j * 34
+			h := binary.LittleEndian.Uint16(buf[blockOff : blockOff+2])
+			q8Blocks[j].D = f16ToF32(h)
+			for k := uint64(0); k < 32; k++ {
+				q8Blocks[j].Q[k] = int8(buf[blockOff+2+k])
+			}
+		}
+		return Tensor{Type: 8, Q8: q8Blocks}, nil
+	}
+
+	return Tensor{}, fmt.Errorf("unsupported tensor type: %d", tInfo.Type)
+}
+
+func (p *GGUFParser) GetTensorF32(name string) ([]float32, error) {
 	tInfo, ok := p.Tensors[name]
 	if !ok {
 		return nil, fmt.Errorf("tensor %s not found", name)
