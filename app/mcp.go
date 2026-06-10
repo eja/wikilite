@@ -73,14 +73,29 @@ func removeSession(sessionID string) {
 }
 
 func (s *WebServer) handleMCP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Mcp-Session-Id")
-	w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id")
+	origin := r.Header.Get("Origin")
+	if origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Vary", "Origin")
+	} else {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	}
+	w.Header().Set("Access-Control-Allow-Methods", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+	w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id, Mcp-Protocol-Version")
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
 		return
+	}
+
+	sessionID := r.Header.Get("Mcp-Session-Id")
+	if sessionID == "" {
+		sessionID = r.Header.Get("X-Proxy-Header-Mcp-Session-Id")
+	}
+	if sessionID == "" {
+		sessionID = r.URL.Query().Get("session_id")
 	}
 
 	if r.Method == "POST" {
@@ -88,11 +103,6 @@ func (s *WebServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON-RPC request", http.StatusBadRequest)
 			return
-		}
-
-		sessionID := r.Header.Get("Mcp-Session-Id")
-		if sessionID == "" {
-			sessionID = r.URL.Query().Get("session_id")
 		}
 
 		if req.Method == "initialize" {
@@ -109,14 +119,12 @@ func (s *WebServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if sessionID == "" {
-			http.Error(w, "Missing session_id", http.StatusBadRequest)
-			return
+			sessionID = "default-session"
 		}
 
 		sess := getSession(sessionID)
 		if sess == nil {
-			http.Error(w, "Session not found", http.StatusNotFound)
-			return
+			sess = registerSession(sessionID)
 		}
 
 		resp := handleJSONRPC(req)
@@ -130,25 +138,19 @@ func (s *WebServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == "GET" {
-		sessionID := r.Header.Get("Mcp-Session-Id")
 		if sessionID == "" {
-			sessionID = r.URL.Query().Get("session_id")
-		}
-
-		if sessionID == "" {
-			http.Error(w, "Missing session_id", http.StatusBadRequest)
-			return
+			sessionID = generateSessionID()
 		}
 
 		sess := getSession(sessionID)
 		if sess == nil {
-			http.Error(w, "Session not found", http.StatusNotFound)
-			return
+			sess = registerSession(sessionID)
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
 
 		scheme := "http"
 		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
@@ -182,6 +184,14 @@ func (s *WebServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+
+	if r.Method == "DELETE" {
+		if sessionID != "" {
+			removeSession(sessionID)
+		}
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -251,7 +261,7 @@ func handleJSONRPC(req jsonRPCRequest) jsonRPCResponse {
 					},
 				},
 				{
-					"name":        "get_article",
+					"name":        "article",
 					"description": "Retrieve the full text and all sections of a Wikipedia article by its integer ID.",
 					"inputSchema": map[string]any{
 						"type": "object",
@@ -355,7 +365,7 @@ func handleToolCall(name string, args map[string]any) map[string]any {
 			"isError": false,
 		}
 
-	case "get_article":
+	case "article":
 		idVal, ok := args["id"]
 		if !ok {
 			return map[string]any{
