@@ -72,7 +72,7 @@ func parseConfig() (*Config, error) {
 	flag.BoolVar(&options.dbCompress, "db-compress", false, "Compress the database")
 
 	flag.StringVar(&options.language, "language", "en", "Language code")
-	flag.IntVar(&options.limit, "limit", 5, "Maximum number of search results")
+	flag.IntVar(&options.limit, "limit", 10, "Maximum number of search results")
 	flag.BoolVar(&options.log, "log", false, "Enable logging")
 	flag.StringVar(&options.logFile, "log-file", "", "Log file path")
 	flag.BoolVar(&options.setup, "setup", false, "Download prebuild database")

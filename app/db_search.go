@@ -11,13 +11,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
 func Snippet(value string) string {
-	if len(value) > 160 {
-		return value[:160] + "..."
+	if utf8.RuneCountInString(value) > 160 {
+		runes := []rune(value)
+		return string(runes[:160]) + "..."
 	}
 	return value
 }
