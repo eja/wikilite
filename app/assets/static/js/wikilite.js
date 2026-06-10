@@ -127,7 +127,7 @@ class SearchApp {
     }
 
     async performSearch(query, type) {
-        const endpoint = `/api/search/${type}`;
+        const endpoint = `../api/search/${type}`;
         const payload = {
             query: query,
             limit: parseInt(document.getElementById("limit").value) || 10
@@ -234,7 +234,7 @@ class SearchApp {
     }
 
     async fetchArticle(articleId) {
-        const response = await fetch(`/api/article?id=${articleId}`);
+        const response = await fetch(`../api/article?id=${articleId}`);
         const data = await response.json();
         
         if (data.status === 'success') {
