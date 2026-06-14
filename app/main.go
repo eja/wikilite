@@ -12,7 +12,7 @@ import (
 )
 
 const Name = "wikilite"
-const Version = "1.6.10"
+const Version = "1.6.14"
 
 type Config struct {
 	aiAnn               bool

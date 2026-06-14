@@ -2,15 +2,22 @@
 
 package it.eja.wikilite
 
-import android.app.ActivityManager
+import android.app.Activity
 import android.app.ProgressDialog
 import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.Settings
+import android.view.Menu
+import android.view.MenuItem
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.documentfile.provider.DocumentFile
 import androidx.recyclerview.widget.LinearLayoutManager
 import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
@@ -28,10 +35,46 @@ class DatabaseDownloadActivity : AppCompatActivity() {
     private val databaseFiles = mutableListOf<String>()
     private lateinit var preferences: SharedPreferences
     private var progressDialog: ProgressDialog? = null
-    private val DB_FILENAME = "wikilite.db"
 
     private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var lastProgressUpdateTime = 0L
+    private var pendingFilePath: String? = null
+
+    private val selectFolderLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val treeUri = result.data?.data
+            if (treeUri != null) {
+                contentResolver.takePersistableUriPermission(
+                    treeUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+                pendingFilePath?.let { filePath ->
+                    startDownload(filePath, treeUri)
+                }
+            }
+        }
+    }
+
+    private val pickExistingDbLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uri = result.data?.data
+            if (uri != null) {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+                preferences.edit().putString("db_uri", uri.toString()).apply()
+                Toast.makeText(this, "Database selected successfully!", Toast.LENGTH_SHORT).show()
+                goToMainActivity()
+            }
+        } else {
+            showDbSelectionDialog()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,7 +83,7 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         preferences = getSharedPreferences("app_prefs", MODE_PRIVATE)
 
         setupUI()
-        loadDatabaseFiles()
+        showDbSelectionDialog()
     }
 
     override fun onDestroy() {
@@ -49,14 +92,39 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         progressDialog?.dismiss()
     }
 
-    private fun getRemovableStoragePath(): String? {
-        val dirs = getExternalFilesDirs(null)
-        for (dir in dirs) {
-            if (dir != null && Environment.isExternalStorageRemovable(dir)) {
-                return dir.absolutePath
+    override fun onCreateOptionsMenu(menu: Menu?): Boolean {
+        menu?.add(0, 1, 0, "Select Existing DB")
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == 1) {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
             }
+            pickExistingDbLauncher.launch(intent)
+            return true
         }
-        return null
+        return super.onOptionsItemSelected(item)
+    }
+
+    private fun showDbSelectionDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Database Selection")
+            .setMessage("Select a local database or download one online?")
+            .setPositiveButton("Local") { _, _ ->
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                }
+                pickExistingDbLauncher.launch(intent)
+            }
+            .setNegativeButton("Online") { _, _ ->
+                loadDatabaseFiles()
+            }
+            .setCancelable(false)
+            .show()
     }
 
     private fun goToMainActivity() {
@@ -75,24 +143,9 @@ class DatabaseDownloadActivity : AppCompatActivity() {
     }
 
     private fun handleDownloadRequest(filePath: String) {
-        val sdCardPath = getRemovableStoragePath()
-        val internalPath = filesDir.absolutePath
-
-        if (sdCardPath != null) {
-            AlertDialog.Builder(this)
-                .setTitle("Select Storage")
-                .setMessage("Where would you like to save the database?")
-                .setPositiveButton("External") { _, _ ->
-                    startDownload(filePath, sdCardPath)
-                }
-                .setNegativeButton("Internal") { _, _ ->
-                    startDownload(filePath, internalPath)
-                }
-                .setNeutralButton("Cancel", null)
-                .show()
-        } else {
-            startDownload(filePath, internalPath)
-        }
+        pendingFilePath = filePath
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+        selectFolderLauncher.launch(intent)
     }
 
     private fun loadDatabaseFiles() {
@@ -116,24 +169,8 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         }
     }
 
-    private fun getAvailableMemoryGB(): Double {
-        val activityManager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
-        val memoryInfo = ActivityManager.MemoryInfo()
-        activityManager.getMemoryInfo(memoryInfo)
-        return memoryInfo.availMem.toDouble() / (1024.0 * 1024.0 * 1024.0)
-    }
-
     private fun loadFilesFromHuggingFace(): List<String> {
         val files = mutableListOf<String>()
-        val availMemGB = getAvailableMemoryGB()
-        val restrictToLexical = availMemGB <= 3.0
-
-        if (restrictToLexical) {
-            runOnUiThread {
-                Toast.makeText(this@DatabaseDownloadActivity, "List restricted to lexical only because there is not enough free RAM.", Toast.LENGTH_LONG).show()
-            }
-        }
-
         try {
             val client = OkHttpClient()
             val request = Request.Builder()
@@ -152,13 +189,7 @@ class DatabaseDownloadActivity : AppCompatActivity() {
                     val rfilename = item.getString("rfilename")
 
                     if (rfilename.endsWith(".db.gz")) {
-                        if (restrictToLexical) {
-                            if (rfilename.startsWith("lexical")) {
-                                files.add(rfilename)
-                            }
-                        } else {
-                            files.add(rfilename)
-                        }
+                        files.add(rfilename)
                     }
                 }
             }
@@ -168,17 +199,16 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         return files
     }
 
-    private fun startDownload(filePath: String, downloadPath: String) {
+    private fun startDownload(filePath: String, treeUri: Uri) {
         activityScope.launch {
             showProgressPreparing()
 
-            val success = downloadAndExtract(filePath, downloadPath)
+            val finalFileUri = downloadAndExtract(filePath, treeUri)
 
             if (!isFinishing && !isDestroyed) {
                 progressDialog?.dismiss()
-                if (success) {
-                    val finalDbPath = File(downloadPath, DB_FILENAME).absolutePath
-                    preferences.edit().putString("db_path", finalDbPath).apply()
+                if (finalFileUri != null) {
+                    preferences.edit().putString("db_uri", finalFileUri.toString()).apply()
                     Toast.makeText(this@DatabaseDownloadActivity, "Download successful!", Toast.LENGTH_SHORT).show()
                     goToMainActivity()
                 } else {
@@ -199,18 +229,17 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun downloadAndExtract(currentFilePath: String, downloadPath: String): Boolean = withContext(Dispatchers.IO) {
-        val tempFile = File(downloadPath, "$DB_FILENAME.tmp")
-        val finalFile = File(downloadPath, DB_FILENAME)
+    private suspend fun downloadAndExtract(currentFilePath: String, treeUri: Uri): Uri? = withContext(Dispatchers.IO) {
+        val remoteFileName = currentFilePath.substringAfterLast('/')
+        val localFileName = if (remoteFileName.endsWith(".gz")) remoteFileName.removeSuffix(".gz") else remoteFileName
 
-        val dir = File(downloadPath)
-        if (!dir.exists()) {
-            dir.mkdirs()
-        }
+        val pickedDir = DocumentFile.fromTreeUri(applicationContext, treeUri) ?: return@withContext null
 
-        if (tempFile.exists()) {
-            tempFile.delete()
-        }
+        val finalFile = pickedDir.findFile(localFileName)
+        finalFile?.delete()
+
+        val createdFinalFile = pickedDir.createFile("application/octet-stream", localFileName) ?: return@withContext null
+        val finalFileUri = createdFinalFile.uri
 
         var success = false
         var connection: HttpURLConnection? = null
@@ -223,7 +252,7 @@ class DatabaseDownloadActivity : AppCompatActivity() {
             connection.connect()
 
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                return@withContext false
+                return@withContext null
             }
 
             val fileLength = connection.contentLength.toLong()
@@ -251,7 +280,8 @@ class DatabaseDownloadActivity : AppCompatActivity() {
                 }
             }
 
-            FileOutputStream(tempFile).use { fos ->
+            val outputStream = contentResolver.openOutputStream(finalFileUri) ?: return@withContext null
+            outputStream.use { fos ->
                 GZIPInputStream(countingInputStream).use { gis ->
                     val buffer = ByteArray(65536)
                     var bytesRead: Int
@@ -263,25 +293,19 @@ class DatabaseDownloadActivity : AppCompatActivity() {
                 }
             }
 
-            if (tempFile.exists() && tempFile.length() > 0) {
-                if (finalFile.exists()) {
-                    finalFile.delete()
-                }
-                if (tempFile.renameTo(finalFile)) {
-                    success = true
-                }
-            }
+            success = true
+            return@withContext finalFileUri
 
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
             connection?.disconnect()
-            if (!success && tempFile.exists()) {
-                tempFile.delete()
+            if (!success) {
+                createdFinalFile.delete()
             }
         }
 
-        return@withContext success
+        return@withContext null
     }
 
     private fun updateProgressOnMain(downloaded: Long, totalDownload: Long, extracted: Long) {
