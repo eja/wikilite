@@ -143,7 +143,7 @@ object Server {
 
     fun restartBinaryServer(context: Context, dbPath: String) {
         stopBinaryServer()
-        Thread.sleep(200)
+        Thread.sleep(1000)
         startBinaryServer(context, dbPath)
     }
 
@@ -152,8 +152,8 @@ object Server {
         try {
             val url = URL(BASE_URL)
             conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 500
-            conn.readTimeout = 500
+            conn.connectTimeout = 2000
+            conn.readTimeout = 2000
             conn.requestMethod = "GET"
             conn.responseCode == 200
         } catch (e: Exception) {
