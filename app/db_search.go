@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"math"
@@ -296,13 +297,29 @@ func (h *DBHandler) SearchVectors(query string, limit int) ([]SearchResult, erro
 	}
 
 	if hasVectors {
+		var buf []byte
+		var floatBuf []float32
+
 		err := sqlitex.ExecuteTransient(conn, sqlQuery, &sqlitex.ExecOptions{
 			ResultFunc: func(stmt *sqlite.Stmt) error {
 				ID := stmt.ColumnInt64(0)
-				embeddingBlob := make([]byte, stmt.ColumnLen(1))
-				stmt.ColumnBytes(1, embeddingBlob)
-				embedding := BytesToFloat32(embeddingBlob)
-				similarity := dot(queryEmbedding, embedding)
+				blobLen := stmt.ColumnLen(1)
+				if len(buf) < blobLen {
+					buf = make([]byte, blobLen)
+				}
+				stmt.ColumnBytes(1, buf[:blobLen])
+
+				floatsLen := blobLen / 4
+				if len(floatBuf) < floatsLen {
+					floatBuf = make([]float32, floatsLen)
+				}
+
+				for i := 0; i < floatsLen; i++ {
+					bits := binary.LittleEndian.Uint32(buf[i*4 : (i+1)*4])
+					floatBuf[i] = math.Float32frombits(bits)
+				}
+
+				similarity := dot(queryEmbedding, floatBuf[:floatsLen])
 
 				if len(topResults) < limit {
 					topResults = append(topResults, VectorDistance{ID: ID, Distance: similarity})

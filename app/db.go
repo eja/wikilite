@@ -109,10 +109,16 @@ func NewDBHandler(dbPath string) (*DBHandler, error) {
 			}
 		}
 	} else {
+		mmapVal := "268435456"
+		cacheVal := "-10000"
+		if !options.aiCache {
+			mmapVal = "0"
+			cacheVal = "-1000"
+		}
 		pragmas := []string{
 			"PRAGMA query_only = ON",
-			"PRAGMA cache_size = -10000",
-			"PRAGMA mmap_size = 268435456",
+			"PRAGMA cache_size = " + cacheVal,
+			"PRAGMA mmap_size = " + mmapVal,
 			"PRAGMA temp_store = MEMORY",
 		}
 		for _, pragma := range pragmas {
@@ -125,23 +131,40 @@ func NewDBHandler(dbPath string) (*DBHandler, error) {
 
 	conn.Close()
 
+	poolSize := 10
+	if !options.aiCache {
+		poolSize = 1
+	}
+
 	opts := sqlitex.PoolOptions{
-		PoolSize: 10,
+		PoolSize: poolSize,
 		PrepareConn: func(conn *sqlite.Conn) error {
 			var pragmas []string
 			if isReadOnly {
+				mmapVal := "268435456"
+				cacheVal := "-10000"
+				if !options.aiCache {
+					mmapVal = "0"
+					cacheVal = "-1000"
+				}
 				pragmas = []string{
 					"PRAGMA query_only = ON",
-					"PRAGMA cache_size = -10000",
-					"PRAGMA mmap_size = 268435456",
+					"PRAGMA cache_size = " + cacheVal,
+					"PRAGMA mmap_size = " + mmapVal,
 					"PRAGMA temp_store = MEMORY",
 				}
 			} else {
+				mmapVal := "268435456"
+				cacheVal := "-10000"
+				if !options.aiCache {
+					mmapVal = "0"
+					cacheVal = "-1000"
+				}
 				pragmas = []string{
 					"PRAGMA synchronous = OFF",
 					"PRAGMA foreign_keys = OFF",
-					"PRAGMA cache_size = -10000",
-					"PRAGMA mmap_size = 268435456",
+					"PRAGMA cache_size = " + cacheVal,
+					"PRAGMA mmap_size = " + mmapVal,
 					"PRAGMA temp_store = MEMORY",
 				}
 			}

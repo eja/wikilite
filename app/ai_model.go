@@ -22,9 +22,12 @@ type qwen3Model struct {
 	embedTokens []float32
 	normWeight  []float32
 	layers      []qwen3Layer
+	parser      *GGUFParser
 }
 
 type qwen3Layer struct {
+	idx       int
+	parser    *GGUFParser
 	inputNorm []float32
 	qProj     Tensor
 	qBias     []float32
@@ -112,36 +115,45 @@ func loadModel(p *GGUFParser) (*qwen3Model, error) {
 	cfgRopeTheta = getFloat64("rope.freq_base", cfgRopeTheta)
 	cfgRMSNormEps = getFloat32("attention.layer_norm_rms_epsilon", cfgRMSNormEps)
 
-	m := &qwen3Model{layers: make([]qwen3Layer, cfgNumLayers)}
+	m := &qwen3Model{
+		layers: make([]qwen3Layer, cfgNumLayers),
+		parser: p,
+	}
 
 	var err error
 
-	if m.embedTokens, err = p.GetTensorF32("token_embd.weight"); err != nil {
-		return nil, err
-	}
+	if options.aiCache {
+		if m.embedTokens, err = p.GetTensorF32("token_embd.weight"); err != nil {
+			return nil, err
+		}
 
-	if m.normWeight, err = p.GetTensorF32("output_norm.weight"); err != nil {
-		return nil, err
+		if m.normWeight, err = p.GetTensorF32("output_norm.weight"); err != nil {
+			return nil, err
+		}
 	}
 
 	for i := range m.layers {
 		lw := &m.layers[i]
+		lw.idx = i
+		lw.parser = p
 
 		if lw.inputNorm, err = p.GetTensorF32(fmt.Sprintf("blk.%d.attn_norm.weight", i)); err != nil {
 			return nil, err
 		}
 
-		if lw.qProj, err = p.GetTensor(fmt.Sprintf("blk.%d.attn_q.weight", i)); err != nil {
-			return nil, err
-		}
-		if lw.kProj, err = p.GetTensor(fmt.Sprintf("blk.%d.attn_k.weight", i)); err != nil {
-			return nil, err
-		}
-		if lw.vProj, err = p.GetTensor(fmt.Sprintf("blk.%d.attn_v.weight", i)); err != nil {
-			return nil, err
-		}
-		if lw.oProj, err = p.GetTensor(fmt.Sprintf("blk.%d.attn_output.weight", i)); err != nil {
-			return nil, err
+		if options.aiCache {
+			if lw.qProj, err = p.GetTensor(fmt.Sprintf("blk.%d.attn_q.weight", i)); err != nil {
+				return nil, err
+			}
+			if lw.kProj, err = p.GetTensor(fmt.Sprintf("blk.%d.attn_k.weight", i)); err != nil {
+				return nil, err
+			}
+			if lw.vProj, err = p.GetTensor(fmt.Sprintf("blk.%d.attn_v.weight", i)); err != nil {
+				return nil, err
+			}
+			if lw.oProj, err = p.GetTensor(fmt.Sprintf("blk.%d.attn_output.weight", i)); err != nil {
+				return nil, err
+			}
 		}
 
 		if lw.qNorm, err = p.GetTensorF32(fmt.Sprintf("blk.%d.attn_q_norm.weight", i)); err != nil {
@@ -155,14 +167,16 @@ func loadModel(p *GGUFParser) (*qwen3Model, error) {
 			return nil, err
 		}
 
-		if lw.gateProj, err = p.GetTensor(fmt.Sprintf("blk.%d.ffn_gate.weight", i)); err != nil {
-			return nil, err
-		}
-		if lw.upProj, err = p.GetTensor(fmt.Sprintf("blk.%d.ffn_up.weight", i)); err != nil {
-			return nil, err
-		}
-		if lw.downProj, err = p.GetTensor(fmt.Sprintf("blk.%d.ffn_down.weight", i)); err != nil {
-			return nil, err
+		if options.aiCache {
+			if lw.gateProj, err = p.GetTensor(fmt.Sprintf("blk.%d.ffn_gate.weight", i)); err != nil {
+				return nil, err
+			}
+			if lw.upProj, err = p.GetTensor(fmt.Sprintf("blk.%d.ffn_up.weight", i)); err != nil {
+				return nil, err
+			}
+			if lw.downProj, err = p.GetTensor(fmt.Sprintf("blk.%d.ffn_down.weight", i)); err != nil {
+				return nil, err
+			}
 		}
 
 		if lw.qBias, err = p.GetTensorF32(fmt.Sprintf("blk.%d.attn_q.bias", i)); err != nil {
@@ -179,13 +193,23 @@ func loadModel(p *GGUFParser) (*qwen3Model, error) {
 	return m, nil
 }
 
-func (m *qwen3Model) embed(tokenIDs []int) []float32 {
+func (m *qwen3Model) embed(tokenIDs []int) ([]float32, error) {
 	seqLen := len(tokenIDs)
 	H := cfgHiddenSize
 
 	hidden := make([]float32, seqLen*H)
-	for i, id := range tokenIDs {
-		copy(hidden[i*H:], m.embedTokens[id*H:(id+1)*H])
+	if !options.aiCache {
+		for i, id := range tokenIDs {
+			emb, err := m.parser.GetTokenEmbedding(id, H)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get token embedding for ID %d: %w", id, err)
+			}
+			copy(hidden[i*H:], emb)
+		}
+	} else {
+		for i, id := range tokenIDs {
+			copy(hidden[i*H:], m.embedTokens[id*H:(id+1)*H])
+		}
 	}
 
 	ropeCache := buildRoPECache(seqLen)
@@ -194,17 +218,35 @@ func (m *qwen3Model) embed(tokenIDs []int) []float32 {
 		lw := &m.layers[i]
 		normed := rmsNormRows(hidden, lw.inputNorm, seqLen)
 		attn := selfAttention(normed, lw, ropeCache, seqLen)
+		if attn == nil {
+			return nil, fmt.Errorf("selfAttention failed at layer %d", i)
+		}
 		vecAdd(hidden, attn)
 		normed2 := rmsNormRows(hidden, lw.postNorm, seqLen)
 		mlpOut := swigluMLP(normed2, lw, seqLen)
+		if mlpOut == nil {
+			return nil, fmt.Errorf("swigluMLP failed at layer %d", i)
+		}
 		vecAdd(hidden, mlpOut)
 	}
 
 	last := make([]float32, H)
 	copy(last, hidden[(seqLen-1)*H:])
-	rmsNormVec(last, m.normWeight)
+
+	var normWeight []float32
+	var err error
+	if !options.aiCache {
+		normWeight, err = m.parser.GetTensorF32("output_norm.weight")
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		normWeight = m.normWeight
+	}
+
+	rmsNormVec(last, normWeight)
 	l2Norm(last)
-	return last
+	return last, nil
 }
 
 func selfAttention(x []float32, lw *qwen3Layer, ropeCache []float32, seqLen int) []float32 {
@@ -213,11 +255,33 @@ func selfAttention(x []float32, lw *qwen3Layer, ropeCache []float32, seqLen int)
 	nKV := cfgNumKVHeads
 	hDim := cfgHeadDim
 
-	q := matMulQuant(x, lw.qProj, seqLen, H, nH*hDim)
+	var qProj, kProj, vProj, oProj Tensor
+	var err error
+
+	if !options.aiCache {
+		qProj, err = lw.parser.GetTensor(fmt.Sprintf("blk.%d.attn_q.weight", lw.idx))
+		if err != nil {
+			return nil
+		}
+		kProj, err = lw.parser.GetTensor(fmt.Sprintf("blk.%d.attn_k.weight", lw.idx))
+		if err != nil {
+			return nil
+		}
+		vProj, err = lw.parser.GetTensor(fmt.Sprintf("blk.%d.attn_v.weight", lw.idx))
+		if err != nil {
+			return nil
+		}
+	} else {
+		qProj = lw.qProj
+		kProj = lw.kProj
+		vProj = lw.vProj
+	}
+
+	q := matMulQuant(x, qProj, seqLen, H, nH*hDim)
 	addBias(q, lw.qBias, seqLen, nH*hDim)
-	k := matMulQuant(x, lw.kProj, seqLen, H, nKV*hDim)
+	k := matMulQuant(x, kProj, seqLen, H, nKV*hDim)
 	addBias(k, lw.kBias, seqLen, nKV*hDim)
-	v := matMulQuant(x, lw.vProj, seqLen, H, nKV*hDim)
+	v := matMulQuant(x, vProj, seqLen, H, nKV*hDim)
 	addBias(v, lw.vBias, seqLen, nKV*hDim)
 
 	rmsNormHeads(q, lw.qNorm, seqLen, nH, hDim)
@@ -227,16 +291,54 @@ func selfAttention(x []float32, lw *qwen3Layer, ropeCache []float32, seqLen int)
 	applyRoPE(k, ropeCache, seqLen, nKV, hDim)
 
 	attnOut := gqa(q, k, v, seqLen)
-	return matMulQuant(attnOut, lw.oProj, seqLen, nH*hDim, H)
+
+	if !options.aiCache {
+		oProj, err = lw.parser.GetTensor(fmt.Sprintf("blk.%d.attn_output.weight", lw.idx))
+		if err != nil {
+			return nil
+		}
+	} else {
+		oProj = lw.oProj
+	}
+
+	return matMulQuant(attnOut, oProj, seqLen, nH*hDim, H)
 }
 
 func swigluMLP(x []float32, lw *qwen3Layer, seqLen int) []float32 {
 	H := cfgHiddenSize
 	I := cfgIntermediateSize
-	gate := matMulQuant(x, lw.gateProj, seqLen, H, I)
-	up := matMulQuant(x, lw.upProj, seqLen, H, I)
+
+	var gateProj, upProj, downProj Tensor
+	var err error
+
+	if !options.aiCache {
+		gateProj, err = lw.parser.GetTensor(fmt.Sprintf("blk.%d.ffn_gate.weight", lw.idx))
+		if err != nil {
+			return nil
+		}
+		upProj, err = lw.parser.GetTensor(fmt.Sprintf("blk.%d.ffn_up.weight", lw.idx))
+		if err != nil {
+			return nil
+		}
+	} else {
+		gateProj = lw.gateProj
+		upProj = lw.upProj
+	}
+
+	gate := matMulQuant(x, gateProj, seqLen, H, I)
+	up := matMulQuant(x, upProj, seqLen, H, I)
 	for i := range gate {
 		gate[i] = silu(gate[i]) * up[i]
 	}
-	return matMulQuant(gate, lw.downProj, seqLen, I, H)
+
+	if !options.aiCache {
+		downProj, err = lw.parser.GetTensor(fmt.Sprintf("blk.%d.ffn_down.weight", lw.idx))
+		if err != nil {
+			return nil
+		}
+	} else {
+		downProj = lw.downProj
+	}
+
+	return matMulQuant(gate, downProj, seqLen, I, H)
 }

@@ -5,20 +5,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"sort"
-	"sync"
 	"time"
-)
-
-var (
-	globalTok *bpeTokenizer
-	globalMdl *qwen3Model
-	globalMu  sync.RWMutex
 )
 
 type aiEmbeddingRequest struct {
@@ -180,29 +173,44 @@ func localAiInit(modelPath string) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 
-	var r io.ReadSeeker
-	var closeFn func() error
-	var err error
-
-	r, closeFn, err = db.AiModelBlob()
-	if err != nil {
-		if modelPath != "" {
-			f, err := os.Open(modelPath)
-			if err != nil {
-				return err
+	if !options.aiCache {
+		file, err := os.Open(options.dbPath)
+		if err == nil {
+			buf := make([]byte, 100)
+			_, err = file.ReadAt(buf, 0)
+			if err == nil {
+				pageSize := int64(binary.BigEndian.Uint16(buf[16:18]))
+				if pageSize == 1 {
+					pageSize = 65536
+				}
+				rootPage, err := findSetupRootPage(file, pageSize)
+				if err == nil {
+					firstOverflowPage, blobSize, err := findGGUFCell(file, rootPage, pageSize)
+					if err == nil {
+						pages, err := mapOverflowPages(file, firstOverflowPage, pageSize)
+						if err == nil && len(pages) > 0 {
+							globalPageSize = pageSize
+							globalBlobSize = blobSize
+							globalPages = pages
+							globalUseCustomStream = true
+						}
+					}
+				}
 			}
-			r = f
-			closeFn = f.Close
-		} else {
-			return fmt.Errorf("no model path specified and no model found in database")
+			file.Close()
 		}
+	}
+
+	r, closeFn, err := openGGUFStream()
+	if err != nil {
+		return err
 	}
 
 	if closeFn != nil {
 		defer closeFn()
 	}
 
-	p, err := NewGGUFParser(r)
+	p, err := NewGGUFParser(NewBufferedReadSeeker(r, 256*1024))
 	if err != nil {
 		return err
 	}
@@ -215,24 +223,86 @@ func localAiInit(modelPath string) error {
 	if err != nil {
 		return err
 	}
+
+	if !options.aiCache {
+		p.r = nil
+	}
+
 	globalTok = tok
 	globalMdl = mdl
+
 	return nil
 }
 
 func localAiEmbeddings(input string) ([]float32, error) {
-	globalMu.RLock()
+	globalMu.Lock()
+	defer globalMu.Unlock()
+
 	tok := globalTok
 	mdl := globalMdl
-	globalMu.RUnlock()
 	if tok == nil || mdl == nil {
-		return nil, fmt.Errorf("model not initialized")
+		if !options.aiCache {
+			r, closeFn, err := openGGUFStream()
+			if err != nil {
+				return nil, err
+			}
+
+			if closeFn != nil {
+				defer closeFn()
+			}
+
+			p, err := NewGGUFParser(NewBufferedReadSeeker(r, 256*1024))
+			if err != nil {
+				return nil, err
+			}
+
+			tok, err = loadTokenizer(p)
+			if err != nil {
+				return nil, err
+			}
+
+			mdl, err = loadModel(p)
+			if err != nil {
+				return nil, err
+			}
+
+			if closeFn != nil {
+				closeFn()
+			}
+
+			globalTok = tok
+			globalMdl = mdl
+		} else {
+			return nil, fmt.Errorf("model not initialized")
+		}
 	}
-	ids := tok.encode(input)
+
+	ids := globalTok.encode(input)
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("empty input")
 	}
-	return mdl.embed(ids), nil
+
+	if !options.aiCache {
+		r, closeFn, err := openGGUFStream()
+		if err != nil {
+			return nil, err
+		}
+
+		globalMdl.parser.r = NewBufferedReadSeeker(r, 256*1024)
+
+		emb, err := globalMdl.embed(ids)
+
+		if closeFn != nil {
+			closeFn()
+		}
+
+		globalMdl.parser.r = nil
+
+		return emb, err
+	}
+
+	emb, err := globalMdl.embed(ids)
+	return emb, err
 }
 
 func clip(s string, n int) string {

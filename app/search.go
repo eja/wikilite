@@ -10,9 +10,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func Search(query string, limit int) ([]SearchResult, error) {
+	start := time.Now()
 	var results []SearchResult
 
 	lexical, err := SearchLexical(query, limit)
@@ -22,7 +24,6 @@ func Search(query string, limit int) ([]SearchResult, error) {
 	results = append(results, lexical...)
 
 	if len(lexical) <= limit {
-
 		semantic, err := SearchSemantic(query, limit)
 		if err != nil {
 			return nil, err
@@ -30,7 +31,13 @@ func Search(query string, limit int) ([]SearchResult, error) {
 		results = append(results, semantic...)
 	}
 
-	return searchOptimize(results, limit), nil
+	res := searchOptimize(results, limit)
+
+	if options.log {
+		log.Printf("Search: %q took %v", query, time.Since(start))
+	}
+
+	return res, nil
 }
 
 func SearchSemantic(query string, limit int) ([]SearchResult, error) {

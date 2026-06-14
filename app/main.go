@@ -21,6 +21,7 @@ type Config struct {
 	aiApi               bool
 	aiApiKey            string
 	aiApiUrl            string
+	aiCache             bool
 	aiModel             string
 	aiModelImport       string
 	aiModelPrefixSave   string
@@ -59,6 +60,7 @@ func parseConfig() (*Config, error) {
 	flag.BoolVar(&options.aiApi, "ai-api", false, "Use API for embeddings generation")
 	flag.StringVar(&options.aiApiKey, "ai-api-key", "", "AI API key")
 	flag.StringVar(&options.aiApiUrl, "ai-api-url", "http://localhost:11434/v1/embeddings", "AI API url")
+	flag.BoolVar(&options.aiCache, "ai-cache", false, "Keep AI model tensors in RAM for quicker embedding generation")
 	flag.StringVar(&options.aiModel, "ai-model", "", "AI embedding model name")
 	flag.StringVar(&options.aiModelImport, "ai-model-import", "", "Import AI model from file path")
 	flag.StringVar(&options.aiModelPrefixSave, "ai-model-prefix-save", "", "AI embedding model task prefix to import a document")
@@ -106,7 +108,6 @@ func parseConfig() (*Config, error) {
 }
 
 func main() {
-
 	options, err := parseConfig()
 	if err != nil {
 		log.Fatalf("Error parsing command line: %v\n", err)
@@ -203,5 +204,4 @@ func main() {
 			log.Fatalf("Error starting web server: %v\n", err)
 		}
 	}
-
 }

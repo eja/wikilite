@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sync"
 )
 
 const (
@@ -57,6 +58,17 @@ type GGUFParser struct {
 	Tensors   map[string]GGUFTensorInfo
 	DataStart int64
 }
+
+var (
+	globalTok             *bpeTokenizer
+	globalMdl             *qwen3Model
+	globalMu              sync.RWMutex
+	globalCloseFn         func() error
+	globalPageSize        int64
+	globalBlobSize        int64
+	globalPages           []uint32
+	globalUseCustomStream bool
+)
 
 func NewGGUFParser(r io.ReadSeeker) (*GGUFParser, error) {
 	p := &GGUFParser{
@@ -398,6 +410,114 @@ func (p *GGUFParser) GetTensorF32(name string) ([]float32, error) {
 			for k := uint64(0); k < 32; k++ {
 				idx := j*32 + k
 				if idx >= size {
+					break
+				}
+				q := int8(buf[blockOff+2+k])
+				out[idx] = float32(q) * d
+			}
+		}
+		return out, nil
+	}
+
+	return nil, fmt.Errorf("unsupported tensor type: %d", tInfo.Type)
+}
+
+func (p *GGUFParser) GetTokenEmbedding(id int, hDim int) ([]float32, error) {
+	tInfo, ok := p.Tensors["token_embd.weight"]
+	if !ok {
+		return nil, fmt.Errorf("tensor token_embd.weight not found")
+	}
+
+	if len(tInfo.Dimensions) < 1 {
+		return nil, fmt.Errorf("token_embd.weight has no dimensions")
+	}
+	dim0 := int64(tInfo.Dimensions[0])
+	var vocabSize int64
+	if len(tInfo.Dimensions) >= 2 {
+		vocabSize = int64(tInfo.Dimensions[1])
+	} else {
+		totalElements := int64(1)
+		for _, d := range tInfo.Dimensions {
+			totalElements *= int64(d)
+		}
+		vocabSize = totalElements / dim0
+	}
+
+	if int64(id) >= vocabSize {
+		return nil, fmt.Errorf("token ID %d out of bounds (vocab size %d)", id, vocabSize)
+	}
+
+	out := make([]float32, hDim)
+
+	if tInfo.Type == 1 {
+		offset := p.DataStart + int64(tInfo.Offset) + int64(id)*dim0*2
+		_, err := p.r.Seek(offset, io.SeekStart)
+		if err != nil {
+			return nil, err
+		}
+		buf := make([]byte, hDim*2)
+		if _, err := io.ReadFull(p.r, buf); err != nil {
+			return nil, err
+		}
+		for i := range out {
+			h := binary.LittleEndian.Uint16(buf[i*2:])
+			out[i] = f16ToF32(h)
+		}
+		return out, nil
+	}
+
+	if tInfo.Type == 30 {
+		offset := p.DataStart + int64(tInfo.Offset) + int64(id)*dim0*2
+		_, err := p.r.Seek(offset, io.SeekStart)
+		if err != nil {
+			return nil, err
+		}
+		buf := make([]byte, hDim*2)
+		if _, err := io.ReadFull(p.r, buf); err != nil {
+			return nil, err
+		}
+		for i := range out {
+			u16 := binary.LittleEndian.Uint16(buf[i*2:])
+			out[i] = math.Float32frombits(uint32(u16) << 16)
+		}
+		return out, nil
+	}
+
+	if tInfo.Type == 0 {
+		offset := p.DataStart + int64(tInfo.Offset) + int64(id)*dim0*4
+		_, err := p.r.Seek(offset, io.SeekStart)
+		if err != nil {
+			return nil, err
+		}
+		buf := make([]byte, hDim*4)
+		if _, err := io.ReadFull(p.r, buf); err != nil {
+			return nil, err
+		}
+		for i := range out {
+			bits := binary.LittleEndian.Uint32(buf[i*4:])
+			out[i] = math.Float32frombits(bits)
+		}
+		return out, nil
+	}
+
+	if tInfo.Type == 8 {
+		numBlocksPerToken := (dim0 + 31) / 32
+		offset := p.DataStart + int64(tInfo.Offset) + int64(id)*numBlocksPerToken*34
+		_, err := p.r.Seek(offset, io.SeekStart)
+		if err != nil {
+			return nil, err
+		}
+		buf := make([]byte, numBlocksPerToken*34)
+		if _, err := io.ReadFull(p.r, buf); err != nil {
+			return nil, err
+		}
+		for j := int64(0); j < numBlocksPerToken; j++ {
+			blockOff := j * 34
+			h := binary.LittleEndian.Uint16(buf[blockOff : blockOff+2])
+			d := f16ToF32(h)
+			for k := int64(0); k < 32; k++ {
+				idx := j*32 + k
+				if idx >= int64(hDim) {
 					break
 				}
 				q := int8(buf[blockOff+2+k])
