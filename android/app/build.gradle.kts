@@ -11,8 +11,8 @@ android {
         applicationId = "it.eja.wikilite"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.6.14"
+        versionCode = 6
+        versionName = "1.6.23"
 
         externalNativeBuild {
             cmake {

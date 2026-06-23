@@ -7,10 +7,7 @@ import android.app.ProgressDialog
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
 import android.widget.Toast
@@ -24,9 +21,12 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.*
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.zip.GZIPInputStream
+import okio.Buffer
+import okio.ForwardingSource
+import okio.GzipSource
+import okio.buffer
+import okio.sink
+import it.eja.wikilite.R
 
 class DatabaseDownloadActivity : AppCompatActivity() {
 
@@ -36,6 +36,7 @@ class DatabaseDownloadActivity : AppCompatActivity() {
     private lateinit var preferences: SharedPreferences
     private var progressDialog: ProgressDialog? = null
 
+    private val okHttpClient = OkHttpClient()
     private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var lastProgressUpdateTime = 0L
     private var pendingFilePath: String? = null
@@ -172,24 +173,23 @@ class DatabaseDownloadActivity : AppCompatActivity() {
     private fun loadFilesFromHuggingFace(): List<String> {
         val files = mutableListOf<String>()
         try {
-            val client = OkHttpClient()
             val request = Request.Builder()
                 .url("https://huggingface.co/api/datasets/eja/wikilite")
                 .build()
 
-            val response = client.newCall(request).execute()
-            val jsonResponse = response.body?.string()
+            okHttpClient.newCall(request).execute().use { response ->
+                val jsonResponse = response.body?.string()
+                if (jsonResponse != null) {
+                    val jsonObject = JSONObject(jsonResponse)
+                    val siblings = jsonObject.getJSONArray("siblings")
 
-            if (jsonResponse != null) {
-                val jsonObject = JSONObject(jsonResponse)
-                val siblings = jsonObject.getJSONArray("siblings")
+                    for (i in 0 until siblings.length()) {
+                        val item = siblings.getJSONObject(i)
+                        val rfilename = item.getString("rfilename")
 
-                for (i in 0 until siblings.length()) {
-                    val item = siblings.getJSONObject(i)
-                    val rfilename = item.getString("rfilename")
-
-                    if (rfilename.endsWith(".db.gz")) {
-                        files.add(rfilename)
+                        if (rfilename.endsWith(".db.gz")) {
+                            files.add(rfilename)
+                        }
                     }
                 }
             }
@@ -242,53 +242,45 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         val finalFileUri = createdFinalFile.uri
 
         var success = false
-        var connection: HttpURLConnection? = null
+        var response: okhttp3.Response? = null
 
         try {
-            val url = URL("https://huggingface.co/datasets/eja/wikilite/resolve/main/$currentFilePath")
-            connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 15000
-            connection.readTimeout = 15000
-            connection.connect()
+            val url = "https://huggingface.co/datasets/eja/wikilite/resolve/main/$currentFilePath"
+            val request = Request.Builder().url(url).build()
+            response = okHttpClient.newCall(request).execute()
 
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+            if (!response.isSuccessful) {
                 return@withContext null
             }
 
-            val fileLength = connection.contentLength.toLong()
-            val inputStream = connection.inputStream
+            val body = response.body ?: return@withContext null
+            val fileLength = body.contentLength()
             var totalExtractedBytes = 0L
-            var bytesDownloaded = 0L
 
-            val countingInputStream = object : FilterInputStream(inputStream) {
-                override fun read(): Int {
-                    val b = super.read()
-                    if (b != -1) {
-                        bytesDownloaded++
+            val progressSource = object : ForwardingSource(body.source()) {
+                var bytesDownloaded = 0L
+                override fun read(sink: Buffer, byteCount: Long): Long {
+                    val bytesRead = super.read(sink, byteCount)
+                    if (bytesRead != -1L) {
+                        bytesDownloaded += bytesRead
                         updateProgressOnMain(bytesDownloaded, fileLength, totalExtractedBytes)
                     }
-                    return b
-                }
-
-                override fun read(b: ByteArray, off: Int, len: Int): Int {
-                    val result = super.read(b, off, len)
-                    if (result != -1) {
-                        bytesDownloaded += result
-                        updateProgressOnMain(bytesDownloaded, fileLength, totalExtractedBytes)
-                    }
-                    return result
+                    return bytesRead
                 }
             }
 
+            val gzipSource = GzipSource(progressSource).buffer()
             val outputStream = contentResolver.openOutputStream(finalFileUri) ?: return@withContext null
-            outputStream.use { fos ->
-                GZIPInputStream(countingInputStream).use { gis ->
-                    val buffer = ByteArray(65536)
-                    var bytesRead: Int
-                    while (gis.read(buffer).also { bytesRead = it } != -1) {
+            val sink = outputStream.sink().buffer()
+
+            sink.use { bufferedSink ->
+                gzipSource.use { bufferedSource ->
+                    val buffer = Buffer()
+                    var read: Long
+                    while (bufferedSource.read(buffer, 65536L).also { read = it } != -1L) {
                         ensureActive()
-                        fos.write(buffer, 0, bytesRead)
-                        totalExtractedBytes += bytesRead
+                        bufferedSink.write(buffer, read)
+                        totalExtractedBytes += read
                     }
                 }
             }
@@ -299,7 +291,7 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
-            connection?.disconnect()
+            response?.close()
             if (!success) {
                 createdFinalFile.delete()
             }
