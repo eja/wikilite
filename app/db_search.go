@@ -254,7 +254,7 @@ func (h *DBHandler) SearchVectors(query string, limit int) ([]SearchResult, erro
 			annLimit = limit * limit
 		}
 		var err error
-		topAnnResults, err = h.SearchAnn(queryEmbedding, options.aiAnnMode, options.aiAnnSize, annLimit)
+		topAnnResults, err = h.SearchAnn(queryEmbedding, options.aiAnnSize, annLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -394,7 +394,7 @@ func (h *DBHandler) SearchVectors(query string, limit int) ([]SearchResult, erro
 	return results, nil
 }
 
-func (h *DBHandler) SearchAnn(vectors []float32, mode string, size int, limit int) ([]VectorDistance, error) {
+func (h *DBHandler) SearchAnn(vectors []float32, size int, limit int) ([]VectorDistance, error) {
 	conn := h.pool.Get(context.Background())
 	if conn == nil {
 		return nil, fmt.Errorf("failed to get connection")
@@ -402,33 +402,127 @@ func (h *DBHandler) SearchAnn(vectors []float32, mode string, size int, limit in
 	defer h.pool.Put(conn)
 
 	start := time.Now()
-	chunkSize := 0
-	if mode == "mrl" {
-		chunkSize = size * 4
-	} else if mode == "binary" {
-		chunkSize = (len(vectors) + 7) / 8
-	} else {
-		return nil, fmt.Errorf("invalid ANN mode")
+	chunkSize := size * 4
+
+	var tableExists bool
+	sqlitex.ExecuteTransient(conn, "SELECT name FROM sqlite_master WHERE type='table' AND name='vectors_ann_centroids'", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			tableExists = true
+			return nil
+		},
+	})
+
+	var centroidsCount int
+	if tableExists {
+		sqlitex.ExecuteTransient(conn, "SELECT COUNT(*) FROM vectors_ann_centroids", &sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				centroidsCount = int(stmt.ColumnInt64(0))
+				return nil
+			},
+		})
 	}
 
-	var quantizedQuery []byte
-	if mode == "binary" {
-		quantizedQuery = QuantizeBinary(vectors)
-	}
+	mrlQuery := make([]float32, size)
+	copy(mrlQuery, vectors[:size])
+	l2Norm(mrlQuery)
 
-	var mrlQuery []float32
-	if mode == "mrl" {
-		mrlQuery = make([]float32, len(vectors))
-		copy(mrlQuery, vectors)
-		if len(mrlQuery) > size {
-			mrlQuery = mrlQuery[:size]
+	var queryStr string
+	if centroidsCount > 0 {
+		centroidStart := time.Now()
+
+		type centroidItem struct {
+			id       int
+			centroid []float32
 		}
-		l2Norm(mrlQuery)
+		var centroids []centroidItem
+		err := sqlitex.ExecuteTransient(conn, "SELECT id, centroid FROM vectors_ann_centroids", &sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				cBytes := make([]byte, stmt.ColumnLen(1))
+				stmt.ColumnBytes(1, cBytes)
+				centroids = append(centroids, centroidItem{
+					id:       int(stmt.ColumnInt64(0)),
+					centroid: BytesToFloat32(cBytes),
+				})
+				return nil
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		type centroidDistance struct {
+			id       int
+			distance float32
+		}
+		var cDists []centroidDistance
+		for _, c := range centroids {
+			cDists = append(cDists, centroidDistance{
+				id:       c.id,
+				distance: dot(mrlQuery, c.centroid),
+			})
+		}
+		sort.Slice(cDists, func(i, j int) bool {
+			return cDists[i].distance > cDists[j].distance
+		})
+
+		targetCount := limit * 2500
+
+		var selectedChunkIDs []int64
+		accumulatedVectors := 0
+		centroidsAdded := 0
+		for _, cd := range cDists {
+			if accumulatedVectors >= targetCount && centroidsAdded >= 2 {
+				break
+			}
+
+			var currentCentroidChunkIDs []int64
+			err = sqlitex.ExecuteTransient(conn, "SELECT chunk_id FROM vectors_ann_centroid_chunks WHERE centroid_id = ?", &sqlitex.ExecOptions{
+				Args: []any{cd.id},
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					currentCentroidChunkIDs = append(currentCentroidChunkIDs, stmt.ColumnInt64(0))
+					return nil
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			for _, chunkID := range currentCentroidChunkIDs {
+				var count int
+				err = sqlitex.ExecuteTransient(conn, "SELECT COUNT(*) FROM vectors_ann_index WHERE chunk_id = ?", &sqlitex.ExecOptions{
+					Args: []any{chunkID},
+					ResultFunc: func(stmt *sqlite.Stmt) error {
+						count = int(stmt.ColumnInt64(0))
+						return nil
+					},
+				})
+				if err != nil {
+					return nil, err
+				}
+				accumulatedVectors += count
+				selectedChunkIDs = append(selectedChunkIDs, chunkID)
+			}
+			centroidsAdded++
+		}
+
+		log.Printf("Search centroids time: %v", time.Since(centroidStart))
+
+		if len(selectedChunkIDs) == 0 {
+			return nil, nil
+		}
+
+		var selectedChunkIDsStr []string
+		for _, cid := range selectedChunkIDs {
+			selectedChunkIDsStr = append(selectedChunkIDsStr, strconv.FormatInt(cid, 10))
+		}
+		queryStr = "SELECT id, chunk FROM vectors_ann_chunks WHERE id IN (" + strings.Join(selectedChunkIDsStr, ",") + ")"
+	} else {
+		queryStr = "SELECT id, chunk FROM vectors_ann_chunks"
 	}
 
 	topAnnResults := make([]VectorDistance, 0, limit)
 
-	err := sqlitex.ExecuteTransient(conn, "SELECT id, chunk FROM vectors_ann_chunks", &sqlitex.ExecOptions{
+	err := sqlitex.ExecuteTransient(conn, queryStr, &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
 			chunkRowID := stmt.ColumnInt64(0)
 			chunkBlob := make([]byte, stmt.ColumnLen(1))
@@ -439,19 +533,8 @@ func (h *DBHandler) SearchAnn(vectors []float32, mode string, size int, limit in
 				embeddingBlob := chunkBlob[position : position+chunkSize]
 
 				var distance float32
-				if mode == "mrl" {
-					storedMRL := BytesToFloat32(embeddingBlob)
-					distance = dot(mrlQuery, storedMRL)
-				}
-				if mode == "binary" {
-					hammingDist, err := HammingDistance(quantizedQuery, embeddingBlob)
-					if err != nil {
-						return err
-					}
-					totalBits := float32(len(quantizedQuery) * 8)
-					matchingBits := totalBits - hammingDist
-					distance = (matchingBits/totalBits)*2.0 - 1.0
-				}
+				storedMRL := BytesToFloat32(embeddingBlob)
+				distance = dot(mrlQuery, storedMRL)
 
 				result.ChunkRowID = chunkRowID
 				result.ChunkPosition = position / chunkSize
@@ -462,9 +545,6 @@ func (h *DBHandler) SearchAnn(vectors []float32, mode string, size int, limit in
 				} else {
 					minIndex := -1
 					minDistance := float32(2.0)
-					if mode == "binary" {
-						minDistance = float32(len(quantizedQuery) * 8)
-					}
 					for i := range topAnnResults {
 						if topAnnResults[i].Distance < minDistance {
 							minDistance = topAnnResults[i].Distance

@@ -99,6 +99,15 @@ func NewDBHandler(dbPath string) (*DBHandler, error) {
 				chunk_id INTEGER NOT NULL,
 				chunk_position INTEGER NOT NULL
 			)`,
+			`CREATE TABLE IF NOT EXISTS vectors_ann_centroids (
+				id INTEGER PRIMARY KEY,
+				centroid BLOB
+			)`,
+			`CREATE TABLE IF NOT EXISTS vectors_ann_centroid_chunks (
+				centroid_id INTEGER,
+				chunk_id INTEGER
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_vectors_ann_centroid_chunks ON vectors_ann_centroid_chunks (centroid_id)`,
 			`CREATE INDEX IF NOT EXISTS idx_vectors_ann_index_chunk_id_position ON vectors_ann_index (chunk_id, chunk_position)`,
 			`CREATE INDEX IF NOT EXISTS idx_sections_article_id ON sections(article_id)`,
 		}
@@ -208,10 +217,6 @@ func NewDBHandler(dbPath string) (*DBHandler, error) {
 
 	if model, err := handler.SetupGet("model"); err == nil && model != "" {
 		options.aiModel = model
-	}
-
-	if annMode, err := handler.SetupGet("annMode"); err == nil && annMode != "" {
-		options.aiAnnMode = annMode
 	}
 
 	if annSize, err := handler.SetupGet("annSize"); err == nil && annSize != "" {

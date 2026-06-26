@@ -6,8 +6,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -247,28 +248,17 @@ func (h *DBHandler) ProcessEmbeddings() (err error) {
 }
 
 func (h *DBHandler) ProcessANN() error {
-	batchSize := 250
-	method := ""
 	size := 0
-	if options.aiAnnMode == "mrl" || options.aiAnnMode == "binary" {
-		method = options.aiAnnMode
-		size = options.aiAnnSize
-		if err := h.SetupPut("annMode", method); err != nil {
-			return err
-		}
-		if err := h.SetupPut("annSize", fmt.Sprintf("%d", size)); err != nil {
-			return err
-		}
+	size = options.aiAnnSize
+	if err := h.SetupPut("annSize", fmt.Sprintf("%d", size)); err != nil {
+		return err
 	}
 
-	if method == "" {
-		return fmt.Errorf("invalid quantization method")
-	}
-	if method == "mrl" && size == 0 {
+	if size == 0 {
 		return fmt.Errorf("invalid quantization size")
 	}
 
-	log.Printf("Loading pending vector IDs for ANN processing using mode %s and size %d...", method, size)
+	log.Printf("Loading pending vector IDs for ANN processing using MRL and size %d...", size)
 
 	conn := h.pool.Get(context.Background())
 	if conn == nil {
@@ -276,134 +266,227 @@ func (h *DBHandler) ProcessANN() error {
 	}
 	defer h.pool.Put(conn)
 
-	var pendingVectorIDs []int
-	err := sqlitex.Execute(conn, `
-        SELECT v.id 
-        FROM vectors v 
-        WHERE v.id NOT IN (SELECT vectors_id FROM vectors_ann_index)
-        ORDER BY v.id`, &sqlitex.ExecOptions{
+	err := sqlitex.Execute(conn, "DELETE FROM vectors_ann_index", nil)
+	if err != nil {
+		return err
+	}
+	err = sqlitex.Execute(conn, "DELETE FROM vectors_ann_chunks", nil)
+	if err != nil {
+		return err
+	}
+	err = sqlitex.Execute(conn, "DELETE FROM vectors_ann_centroids", nil)
+	if err != nil {
+		return err
+	}
+	err = sqlitex.Execute(conn, "DELETE FROM vectors_ann_centroid_chunks", nil)
+	if err != nil {
+		return err
+	}
+
+	type clusterItem struct {
+		id  int
+		emb []float32
+	}
+	var mrlItems []clusterItem
+
+	err = sqlitex.Execute(conn, "SELECT id, embedding FROM vectors ORDER BY id", &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
-			pendingVectorIDs = append(pendingVectorIDs, int(stmt.ColumnInt64(0)))
+			embBytes := make([]byte, stmt.ColumnLen(1))
+			stmt.ColumnBytes(1, embBytes)
+			fullEmb := BytesToFloat32(embBytes)
+
+			currentSize := size
+			if len(fullEmb) < currentSize {
+				currentSize = len(fullEmb)
+			}
+
+			emb := make([]float32, currentSize)
+			copy(emb, fullEmb[:currentSize])
+			l2Norm(emb)
+
+			mrlItems = append(mrlItems, clusterItem{
+				id:  int(stmt.ColumnInt64(0)),
+				emb: emb,
+			})
 			return nil
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("error loading pending vector IDs: %w", err)
+		return err
 	}
 
-	totalCount := len(pendingVectorIDs)
-	log.Printf("Pending ANN processing: %d", totalCount)
-
+	totalCount := len(mrlItems)
 	if totalCount == 0 {
 		log.Printf("No vectors to process")
 		return nil
 	}
 
-	sort.Ints(pendingVectorIDs)
+	k := totalCount / 2500
+	if k < 1 {
+		k = 1
+	}
 
-	startTime := time.Now()
-	processed := 0
+	centroids := make([][]float32, k)
+	for i := range k {
+		centroids[i] = make([]float32, size)
+		copy(centroids[i], mrlItems[(i*totalCount)/k].emb)
+	}
 
-	for processed < totalCount {
-		end := min(processed+batchSize, totalCount)
-		batchIDs := pendingVectorIDs[processed:end]
-		if len(batchIDs) == 0 {
-			break
+	log.Printf("Clustering vectors into %d centroids...", k)
+
+	assignments := make([]int, totalCount)
+	for iter := 0; iter < 10; iter++ {
+		clusterStart := time.Now()
+
+		numWorkers := options.aiThreads
+		if numWorkers <= 0 {
+			numWorkers = runtime.NumCPU()
 		}
 
-		err = func() error {
-			var err error
-			deferFn := sqlitex.Transaction(conn)
-			defer deferFn(&err)
+		var wg sync.WaitGroup
+		chunkSize := (totalCount + numWorkers - 1) / numWorkers
 
-			placeholders := make([]string, len(batchIDs))
-			args := make([]any, len(batchIDs))
-			for i, id := range batchIDs {
-				placeholders[i] = "?"
-				args[i] = id
+		for w := 0; w < numWorkers; w++ {
+			startIdx := w * chunkSize
+			if startIdx >= totalCount {
+				break
+			}
+			endIdx := startIdx + chunkSize
+			if endIdx > totalCount {
+				endIdx = totalCount
 			}
 
-			query := fmt.Sprintf("SELECT id, embedding FROM vectors WHERE id IN (%s)", strings.Join(placeholders, ","))
-
-			type vectorData struct {
-				id        int
-				embedding []byte
-			}
-			var vectors []vectorData
-
-			err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
-				Args: args,
-				ResultFunc: func(stmt *sqlite.Stmt) error {
-					embBytes := make([]byte, stmt.ColumnLen(1))
-					stmt.ColumnBytes(1, embBytes)
-					vectors = append(vectors, vectorData{
-						id:        int(stmt.ColumnInt64(0)),
-						embedding: embBytes,
-					})
-					return nil
-				},
-			})
-			if err != nil {
-				return err
-			}
-
-			var annChunkID int
-			err = sqlitex.Execute(conn, "SELECT COALESCE(MAX(id), 0) + 1 FROM vectors_ann_chunks", &sqlitex.ExecOptions{
-				ResultFunc: func(stmt *sqlite.Stmt) error {
-					annChunkID = int(stmt.ColumnInt64(0))
-					return nil
-				},
-			})
-			if err != nil {
-				return err
-			}
-
-			var annChunkData []byte
-			for i, v := range vectors {
-				embedding := BytesToFloat32(v.embedding)
-				var annData []byte
-				if method == "mrl" {
-					truncated := make([]float32, size)
-					copy(truncated, embedding[:size])
-					l2Norm(truncated)
-					annData = Float32ToBytes(truncated)
-				} else if method == "binary" {
-					annData = QuantizeBinary(embedding)
+			wg.Add(1)
+			go func(start, end int) {
+				defer wg.Done()
+				for i := start; i < end; i++ {
+					item := mrlItems[i]
+					bestIdx := 0
+					bestSim := float32(-1.0)
+					for cIdx, c := range centroids {
+						sim := dot(item.emb, c)
+						if sim > bestSim {
+							bestSim = sim
+							bestIdx = cIdx
+						}
+					}
+					assignments[i] = bestIdx
 				}
+			}(startIdx, endIdx)
+		}
+		wg.Wait()
 
-				err = sqlitex.Execute(conn, "INSERT INTO vectors_ann_index (vectors_id, chunk_id, chunk_position) VALUES (?, ?, ?)", &sqlitex.ExecOptions{
-					Args: []any{v.id, annChunkID, i},
+		nextCentroids := make([][]float32, k)
+		counts := make([]int, k)
+		for i := range k {
+			nextCentroids[i] = make([]float32, size)
+		}
+
+		for i, item := range mrlItems {
+			cIdx := assignments[i]
+			for d := range size {
+				nextCentroids[cIdx][d] += item.emb[d]
+			}
+			counts[cIdx]++
+		}
+
+		for i := range k {
+			if counts[i] > 0 {
+				l2Norm(nextCentroids[i])
+				centroids[i] = nextCentroids[i]
+			} else {
+				copy(centroids[i], mrlItems[(i*7)%totalCount].emb)
+			}
+		}
+
+		log.Printf("Centroid clustering iteration %d/10 completed in %v", iter+1, time.Since(clusterStart))
+	}
+
+	groups := make([][]clusterItem, k)
+	for i, item := range mrlItems {
+		cIdx := assignments[i]
+		groups[cIdx] = append(groups[cIdx], item)
+	}
+
+	startTime := time.Now()
+	processedCount := 0
+
+	err = func() error {
+		var err error
+		deferFn := sqlitex.Transaction(conn)
+		defer deferFn(&err)
+
+		for cIdx, group := range groups {
+			centroidBytes := Float32ToBytes(centroids[cIdx])
+			err = sqlitex.Execute(conn, "INSERT OR REPLACE INTO vectors_ann_centroids (id, centroid) VALUES (?, ?)", &sqlitex.ExecOptions{
+				Args: []any{cIdx + 1, centroidBytes},
+			})
+			if err != nil {
+				return err
+			}
+
+			for gStart := 0; gStart < len(group); gStart += 2500 {
+				gEnd := gStart + 2500
+				if gEnd > len(group) {
+					gEnd = len(group)
+				}
+				subGroup := group[gStart:gEnd]
+
+				var annChunkID int
+				err = sqlitex.Execute(conn, "SELECT COALESCE(MAX(id), 0) + 1 FROM vectors_ann_chunks", &sqlitex.ExecOptions{
+					ResultFunc: func(stmt *sqlite.Stmt) error {
+						annChunkID = int(stmt.ColumnInt64(0))
+						return nil
+					},
 				})
 				if err != nil {
 					return err
 				}
 
-				annChunkData = append(annChunkData, annData...)
+				var annChunkData []byte
+				for i, item := range subGroup {
+					annData := Float32ToBytes(item.emb)
+
+					err = sqlitex.Execute(conn, "INSERT INTO vectors_ann_index (vectors_id, chunk_id, chunk_position) VALUES (?, ?, ?)", &sqlitex.ExecOptions{
+						Args: []any{item.id, annChunkID, i},
+					})
+					if err != nil {
+						return err
+					}
+
+					annChunkData = append(annChunkData, annData...)
+				}
+
+				err = sqlitex.Execute(conn, "INSERT INTO vectors_ann_chunks (id, chunk) VALUES (?, ?)", &sqlitex.ExecOptions{
+					Args: []any{annChunkID, annChunkData},
+				})
+				if err != nil {
+					return err
+				}
+
+				err = sqlitex.Execute(conn, "INSERT INTO vectors_ann_centroid_chunks (centroid_id, chunk_id) VALUES (?, ?)", &sqlitex.ExecOptions{
+					Args: []any{cIdx + 1, annChunkID},
+				})
+				if err != nil {
+					return err
+				}
+
+				processedCount += len(subGroup)
+				progress := float64(processedCount) / float64(totalCount) * 100
+				elapsed := time.Since(startTime)
+				var remainingTime time.Duration
+				if progress > 0 {
+					estimatedTotalTime := time.Duration(float64(elapsed) / (progress / 100.0))
+					remainingTime = estimatedTotalTime - elapsed
+				}
+
+				log.Printf("ANN progress: %.2f%%, Processed: %d/%d, Remaining: %s", progress, processedCount, totalCount, remainingTime.Truncate(time.Second))
 			}
-
-			err = sqlitex.Execute(conn, "INSERT INTO vectors_ann_chunks (id, chunk) VALUES (?, ?)", &sqlitex.ExecOptions{
-				Args: []any{annChunkID, annChunkData},
-			})
-			if err != nil {
-				return err
-			}
-
-			return nil
-		}()
-		if err != nil {
-			return err
 		}
-
-		processed += len(batchIDs)
-		progress := float64(processed) / float64(totalCount) * 100
-		elapsed := time.Since(startTime)
-
-		if progress > 0 {
-			estimatedTotal := time.Duration(float64(elapsed) / (progress / 100.0))
-			remaining := estimatedTotal - elapsed
-			log.Printf("ANN progress: %.2f%%, Processed: %d/%d, Remaining: %s",
-				progress, processed, totalCount, remaining.Truncate(time.Second))
-		}
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
 
 	log.Printf("ANN processing completed in %s", time.Since(startTime))

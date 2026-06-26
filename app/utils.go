@@ -114,19 +114,6 @@ func (bc *byteCounter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func QuantizeBinary(values []float32) []byte {
-	numBytes := (len(values) + 7) / 8
-	packedData := make([]byte, numBytes)
-
-	for i, value := range values {
-		if value >= 0 {
-			packedData[i/8] |= 1 << (i % 8)
-		}
-	}
-
-	return packedData
-}
-
 func BytesToFloat32(bytes []byte) []float32 {
 	if len(bytes)%4 != 0 {
 		panic("input byte slice length must be a multiple of 4")

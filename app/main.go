@@ -12,11 +12,10 @@ import (
 )
 
 const Name = "wikilite"
-const Version = "1.6.14"
+const Version = "1.6.26"
 
 type Config struct {
 	aiAnn               bool
-	aiAnnMode           string
 	aiAnnSize           int
 	aiApi               bool
 	aiApiKey            string
@@ -55,8 +54,7 @@ var (
 func parseConfig() (*Config, error) {
 	options = &Config{}
 	flag.BoolVar(&options.aiAnn, "ai-ann", false, "Produce ANN vectors")
-	flag.StringVar(&options.aiAnnMode, "ai-ann-mode", "", "Approximate Nearest Neighbor mode [mrl/binary]")
-	flag.IntVar(&options.aiAnnSize, "ai-ann-size", 0, "ANN MRL size")
+	flag.IntVar(&options.aiAnnSize, "ai-ann-size", 64, "ANN MRL size")
 	flag.BoolVar(&options.aiApi, "ai-api", false, "Use API for embeddings generation")
 	flag.StringVar(&options.aiApiKey, "ai-api-key", "", "AI API key")
 	flag.StringVar(&options.aiApiUrl, "ai-api-url", "http://localhost:11434/v1/embeddings", "AI API url")
