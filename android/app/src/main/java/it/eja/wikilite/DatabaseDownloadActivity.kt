@@ -6,6 +6,7 @@ import android.app.Activity
 import android.app.ProgressDialog
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.view.Menu
@@ -84,7 +85,11 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         preferences = getSharedPreferences("app_prefs", MODE_PRIVATE)
 
         setupUI()
-        showDbSelectionDialog()
+        if (isManageExternalStorageDeclared()) {
+            showDbSelectionDialog()
+        } else {
+            loadDatabaseFiles()
+        }
     }
 
     override fun onDestroy() {
@@ -94,8 +99,11 @@ class DatabaseDownloadActivity : AppCompatActivity() {
     }
 
     override fun onCreateOptionsMenu(menu: Menu?): Boolean {
-        menu?.add(0, 1, 0, "Select Existing DB")
-        return true
+        if (isManageExternalStorageDeclared()) {
+            menu?.add(0, 1, 0, "Select Existing DB")
+            return true
+        }
+        return false
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
@@ -143,10 +151,25 @@ class DatabaseDownloadActivity : AppCompatActivity() {
         recyclerView.adapter = adapter
     }
 
+    private fun isManageExternalStorageDeclared(): Boolean {
+        return try {
+            @Suppress("DEPRECATION")
+            val packageInfo = packageManager.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS)
+            packageInfo.requestedPermissions?.contains("android.permission.MANAGE_EXTERNAL_STORAGE") == true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun handleDownloadRequest(filePath: String) {
         pendingFilePath = filePath
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-        selectFolderLauncher.launch(intent)
+        if (isManageExternalStorageDeclared()) {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            selectFolderLauncher.launch(intent)
+        } else {
+            val defaultFolder = getExternalFilesDir(null) ?: filesDir
+            startDownload(filePath, Uri.fromFile(defaultFolder))
+        }
     }
 
     private fun loadDatabaseFiles() {
@@ -230,74 +253,141 @@ class DatabaseDownloadActivity : AppCompatActivity() {
     }
 
     private suspend fun downloadAndExtract(currentFilePath: String, treeUri: Uri): Uri? = withContext(Dispatchers.IO) {
-        val remoteFileName = currentFilePath.substringAfterLast('/')
-        val localFileName = if (remoteFileName.endsWith(".gz")) remoteFileName.removeSuffix(".gz") else remoteFileName
-
-        val pickedDir = DocumentFile.fromTreeUri(applicationContext, treeUri) ?: return@withContext null
-
-        val finalFile = pickedDir.findFile(localFileName)
-        finalFile?.delete()
-
-        val createdFinalFile = pickedDir.createFile("application/octet-stream", localFileName) ?: return@withContext null
-        val finalFileUri = createdFinalFile.uri
-
-        var success = false
-        var response: okhttp3.Response? = null
-
-        try {
-            val url = "https://huggingface.co/datasets/eja/wikilite/resolve/main/$currentFilePath"
-            val request = Request.Builder().url(url).build()
-            response = okHttpClient.newCall(request).execute()
-
-            if (!response.isSuccessful) {
-                return@withContext null
+        if (!isManageExternalStorageDeclared()) {
+            val defaultFolder = File(treeUri.path ?: "")
+            val finalFile = File(defaultFolder, "wikilite.db")
+            if (finalFile.exists()) {
+                finalFile.delete()
             }
+            finalFile.createNewFile()
 
-            val body = response.body ?: return@withContext null
-            val fileLength = body.contentLength()
-            var totalExtractedBytes = 0L
+            var success = false
+            var response: okhttp3.Response? = null
 
-            val progressSource = object : ForwardingSource(body.source()) {
-                var bytesDownloaded = 0L
-                override fun read(sink: Buffer, byteCount: Long): Long {
-                    val bytesRead = super.read(sink, byteCount)
-                    if (bytesRead != -1L) {
-                        bytesDownloaded += bytesRead
-                        updateProgressOnMain(bytesDownloaded, fileLength, totalExtractedBytes)
+            try {
+                val url = "https://huggingface.co/datasets/eja/wikilite/resolve/main/$currentFilePath"
+                val request = Request.Builder().url(url).build()
+                response = okHttpClient.newCall(request).execute()
+
+                if (!response.isSuccessful) {
+                    return@withContext null
+                }
+
+                val body = response.body ?: return@withContext null
+                val fileLength = body.contentLength()
+                var totalExtractedBytes = 0L
+
+                val progressSource = object : ForwardingSource(body.source()) {
+                    var bytesDownloaded = 0L
+                    override fun read(sink: Buffer, byteCount: Long): Long {
+                        val bytesRead = super.read(sink, byteCount)
+                        if (bytesRead != -1L) {
+                            bytesDownloaded += bytesRead
+                            updateProgressOnMain(bytesDownloaded, fileLength, totalExtractedBytes)
+                        }
+                        return bytesRead
                     }
-                    return bytesRead
+                }
+
+                val gzipSource = GzipSource(progressSource).buffer()
+                val outputStream = FileOutputStream(finalFile)
+                val sink = outputStream.sink().buffer()
+
+                sink.use { bufferedSink ->
+                    gzipSource.use { bufferedSource ->
+                        val buffer = Buffer()
+                        var read: Long
+                        while (bufferedSource.read(buffer, 65536L).also { read = it } != -1L) {
+                            ensureActive()
+                            bufferedSink.write(buffer, read)
+                            totalExtractedBytes += read
+                        }
+                    }
+                }
+
+                success = true
+                return@withContext Uri.fromFile(finalFile)
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                response?.close()
+                if (!success) {
+                    finalFile.delete()
                 }
             }
 
-            val gzipSource = GzipSource(progressSource).buffer()
-            val outputStream = contentResolver.openOutputStream(finalFileUri) ?: return@withContext null
-            val sink = outputStream.sink().buffer()
+            return@withContext null
+        } else {
+            val remoteFileName = currentFilePath.substringAfterLast('/')
+            val localFileName = if (remoteFileName.endsWith(".gz")) remoteFileName.removeSuffix(".gz") else remoteFileName
 
-            sink.use { bufferedSink ->
-                gzipSource.use { bufferedSource ->
-                    val buffer = Buffer()
-                    var read: Long
-                    while (bufferedSource.read(buffer, 65536L).also { read = it } != -1L) {
-                        ensureActive()
-                        bufferedSink.write(buffer, read)
-                        totalExtractedBytes += read
+            val pickedDir = DocumentFile.fromTreeUri(applicationContext, treeUri) ?: return@withContext null
+
+            val finalFile = pickedDir.findFile(localFileName)
+            finalFile?.delete()
+
+            val createdFinalFile = pickedDir.createFile("application/octet-stream", localFileName) ?: return@withContext null
+            val finalFileUri = createdFinalFile.uri
+
+            var success = false
+            var response: okhttp3.Response? = null
+
+            try {
+                val url = "https://huggingface.co/datasets/eja/wikilite/resolve/main/$currentFilePath"
+                val request = Request.Builder().url(url).build()
+                response = okHttpClient.newCall(request).execute()
+
+                if (!response.isSuccessful) {
+                    return@withContext null
+                }
+
+                val body = response.body ?: return@withContext null
+                val fileLength = body.contentLength()
+                var totalExtractedBytes = 0L
+
+                val progressSource = object : ForwardingSource(body.source()) {
+                    var bytesDownloaded = 0L
+                    override fun read(sink: Buffer, byteCount: Long): Long {
+                        val bytesRead = super.read(sink, byteCount)
+                        if (bytesRead != -1L) {
+                            bytesDownloaded += bytesRead
+                            updateProgressOnMain(bytesDownloaded, fileLength, totalExtractedBytes)
+                        }
+                        return bytesRead
                     }
+                }
+
+                val gzipSource = GzipSource(progressSource).buffer()
+                val outputStream = contentResolver.openOutputStream(finalFileUri) ?: return@withContext null
+                val sink = outputStream.sink().buffer()
+
+                sink.use { bufferedSink ->
+                    gzipSource.use { bufferedSource ->
+                        val buffer = Buffer()
+                        var read: Long
+                        while (bufferedSource.read(buffer, 65536L).also { read = it } != -1L) {
+                            ensureActive()
+                            bufferedSink.write(buffer, read)
+                            totalExtractedBytes += read
+                        }
+                    }
+                }
+
+                success = true
+                return@withContext finalFileUri
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                response?.close()
+                if (!success) {
+                    createdFinalFile.delete()
                 }
             }
 
-            success = true
-            return@withContext finalFileUri
-
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            response?.close()
-            if (!success) {
-                createdFinalFile.delete()
-            }
+            return@withContext null
         }
-
-        return@withContext null
     }
 
     private fun updateProgressOnMain(downloaded: Long, totalDownload: Long, extracted: Long) {

@@ -5,6 +5,7 @@ package it.eja.wikilite
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +24,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -42,18 +44,38 @@ class MainActivity : AppCompatActivity() {
         initializeAppLogic()
     }
 
-    private fun initializeAppLogic() {
-        val savedDbUri = preferences.getString("db_uri", "")
+    private fun isManageExternalStorageDeclared(): Boolean {
+        return try {
+            @Suppress("DEPRECATION")
+            val packageInfo = packageManager.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS)
+            packageInfo.requestedPermissions?.contains("android.permission.MANAGE_EXTERNAL_STORAGE") == true
+        } catch (e: Exception) {
+            false
+        }
+    }
 
-        if (!savedDbUri.isNullOrEmpty() && hasUriPermission(savedDbUri)) {
-            if (checkAllFilesAccess()) {
-                initApp(savedDbUri)
+    private fun initializeAppLogic() {
+        if (isManageExternalStorageDeclared()) {
+            val savedDbUri = preferences.getString("db_uri", "")
+            if (!savedDbUri.isNullOrEmpty() && hasUriPermission(savedDbUri)) {
+                if (checkAllFilesAccess()) {
+                    initApp(savedDbUri)
+                } else {
+                    showPermissionExplanationDialog()
+                }
             } else {
-                showPermissionExplanationDialog()
+                startActivity(Intent(this, DatabaseDownloadActivity::class.java))
+                finish()
             }
         } else {
-            startActivity(Intent(this, DatabaseDownloadActivity::class.java))
-            finish()
+            val defaultFolder = getExternalFilesDir(null) ?: filesDir
+            val dbFile = File(defaultFolder, "wikilite.db")
+            if (dbFile.exists()) {
+                initApp(dbFile.absolutePath)
+            } else {
+                startActivity(Intent(this, DatabaseDownloadActivity::class.java))
+                finish()
+            }
         }
     }
 
