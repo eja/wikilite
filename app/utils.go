@@ -5,43 +5,20 @@ package main
 import (
 	"bytes"
 	"compress/flate"
-	"crypto/md5"
 	"embed"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 )
 
 //go:embed assets
 var assets embed.FS
-
-func calculateHash(texts []string) string {
-	hasher := md5.New()
-	for _, text := range texts {
-		hasher.Write([]byte(text))
-	}
-	return hex.EncodeToString(hasher.Sum(nil))
-}
-
-func cleanHashes(hashes []string) []string {
-	cleanedHashes := make([]string, len(hashes))
-
-	for i, hash := range hashes {
-		cleanedHash := strings.ToLower(strings.ReplaceAll(hash, "-", ""))
-		cleanedHashes[i] = cleanedHash
-	}
-
-	return cleanedHashes
-}
 
 func extractNumberFromString(s string) int {
 	re := regexp.MustCompile(`\d+`)
@@ -97,14 +74,6 @@ func TextDeflate(text string) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-func MuteStderr() (*os.File, error) {
-	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		return nil, fmt.Errorf("failed to mute stderr: %v", err)
-	}
-	return devNull, nil
-}
-
 type byteCounter struct {
 	total *int64
 }
@@ -137,53 +106,6 @@ func Float32ToBytes(values []float32) []byte {
 	}
 
 	return bytes
-}
-
-func NormalizeVectors(vectors [][]float32) [][]float32 {
-	normalized := make([][]float32, len(vectors))
-
-	for i, vec := range vectors {
-		if len(vec) == 0 {
-			normalized[i] = vec
-			continue
-		}
-
-		magnitude := float32(0.0)
-		for _, val := range vec {
-			magnitude += val * val
-		}
-		magnitude = float32(math.Sqrt(float64(magnitude)))
-
-		if magnitude == 0 {
-			normalized[i] = make([]float32, len(vec))
-			copy(normalized[i], vec)
-		} else {
-			normalized[i] = make([]float32, len(vec))
-			for j, val := range vec {
-				normalized[i][j] = val / magnitude
-			}
-		}
-	}
-
-	return normalized
-}
-
-func ExtractMRL(embedding []float32, size int) []byte {
-	if size <= 0 || size > len(embedding) {
-		size = len(embedding)
-	}
-
-	truncated := make([]float32, size)
-	copy(truncated, embedding[:size])
-	l2Norm(truncated)
-
-	result := make([]byte, size*4)
-	for i := 0; i < size; i++ {
-		bits := math.Float32bits(truncated[i])
-		binary.LittleEndian.PutUint32(result[i*4:(i+1)*4], bits)
-	}
-
-	return result
 }
 
 func OpenBrowser(url string, delay int) error {

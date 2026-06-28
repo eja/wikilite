@@ -79,32 +79,6 @@ func SetupFilterDBFiles(siblings []SetupSibling) []SetupSibling {
 	return dbFiles
 }
 
-func SetupDownloadFile(file string, outputPath string, progressCallback func(float64)) error {
-	client := createHTTPClient()
-	resp, err := client.Get(SetupDBBaseUrl + file)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download file: server returned status %d", resp.StatusCode)
-	}
-
-	totalSize := resp.ContentLength
-
-	out, err := os.Create(outputPath)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	teeReader := io.TeeReader(resp.Body, &SetupProgressReader{totalSize: totalSize, progressCallback: progressCallback})
-
-	_, err = io.Copy(out, teeReader)
-	return err
-}
-
 func SetupGunzipFile(file string, outputPath string, progressCallback func(float64)) error {
 	client := createHTTPClient()
 	resp, err := client.Get(SetupDBBaseUrl + file)

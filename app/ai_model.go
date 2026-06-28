@@ -7,7 +7,6 @@ import (
 )
 
 var (
-	cfgVocabSize        = 151669
 	cfgHiddenSize       = 1024
 	cfgNumLayers        = 28
 	cfgNumHeads         = 16

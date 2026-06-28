@@ -12,7 +12,7 @@ import (
 )
 
 const Name = "wikilite"
-const Version = "1.6.26"
+const Version = "1.6.28"
 
 type Config struct {
 	aiAnn               bool
@@ -57,12 +57,12 @@ func parseConfig() (*Config, error) {
 	flag.IntVar(&options.aiAnnSize, "ai-ann-size", 64, "ANN MRL size")
 	flag.BoolVar(&options.aiApi, "ai-api", false, "Use API for embeddings generation")
 	flag.StringVar(&options.aiApiKey, "ai-api-key", "", "AI API key")
-	flag.StringVar(&options.aiApiUrl, "ai-api-url", "http://localhost:11434/v1/embeddings", "AI API url")
+	flag.StringVar(&options.aiApiUrl, "ai-api-url", "http://localhost:8080/v1/embeddings", "AI API url")
 	flag.BoolVar(&options.aiCache, "ai-cache", false, "Keep AI model tensors in RAM for quicker embedding generation")
-	flag.StringVar(&options.aiModel, "ai-model", "", "AI embedding model name")
+	flag.StringVar(&options.aiModel, "ai-model", "Qwen3-Embedding-0.6B-Q8_0", "AI embedding model name")
 	flag.StringVar(&options.aiModelImport, "ai-model-import", "", "Import AI model from file path")
 	flag.StringVar(&options.aiModelPrefixSave, "ai-model-prefix-save", "", "AI embedding model task prefix to import a document")
-	flag.StringVar(&options.aiModelPrefixSearch, "ai-model-prefix-search", "", "AI embedding model task prefix to perform a search")
+	flag.StringVar(&options.aiModelPrefixSearch, "ai-model-prefix-search", "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:", "AI embedding model task prefix to perform a search")
 	flag.IntVar(&options.aiThreads, "ai-threads", 0, "Embedding generation threads (default all)")
 	flag.BoolVar(&options.aiSync, "ai-sync", false, "Generate embeddings")
 

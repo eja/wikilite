@@ -16,14 +16,6 @@ func dot(a, b []float32) float32 {
 	return s
 }
 
-func vecNorm(v []float32) float64 {
-	var s float64
-	for _, x := range v {
-		s += float64(x) * float64(x)
-	}
-	return math.Sqrt(s)
-}
-
 func addBias(x, bias []float32, rows, cols int) {
 	if len(bias) == 0 {
 		return

@@ -63,7 +63,6 @@ var (
 	globalTok             *bpeTokenizer
 	globalMdl             *qwen3Model
 	globalMu              sync.RWMutex
-	globalCloseFn         func() error
 	globalPageSize        int64
 	globalBlobSize        int64
 	globalPages           []uint32

@@ -24,7 +24,6 @@ Wikilite is a self-contained tool for creating a local SQLite database of Wikipe
 Pre-compiled binaries for Linux, macOS, and Windows are available in the [latest release](https://github.com/eja/wikilite/releases/latest).
 
 A native [Android application](https://github.com/eja/wikilite/releases/latest/download/wikilite-android.apk) is also available in the releases.
-*   **Memory Requirements**: A minimum of 3 GB of free RAM is required to use the semantic search database on Android.
 *   **External Storage Support**: If a `wikilite.db` file is already present in the external SD card, the Android app will detect and use it directly.
 *   **In-App Download**: If no database is found on launch, the app provides an option to download a pre-built database.
 
@@ -69,7 +68,7 @@ Wikilite operates as an MCP server over Server-Sent Events (SSE) and Streamable 
 The server exposes the following tools:
 
 * **`search`**: Queries the local Wikipedia database using lexical or semantic options and returns a list of matching articles with matching scores and snippets.
-* **`get_article`**: Retrieves the full body text and sections of a Wikipedia article by its integer ID.
+* **`article`**: Retrieves the full body text and sections of a Wikipedia article by its integer ID.
 
 To connect an MCP-compatible client, configure it to connect to the active server endpoint:
 `http://localhost:35248/mcp`
@@ -89,7 +88,7 @@ Semantic search complements the FTS5 lexical search to deliver more comprehensiv
 
 Wikilite supports two methods for generating and processing embeddings:
 
-1. **Native (Pure Go)**: Runs locally without external dependencies using built-in support for Qwen3 embeddings.
+1. **Native (Pure Go)**: Runs locally without external dependencies using built-in support for Qwen3 embeddings. By default, it operates with low memory usage by streaming model tensors on-demand directly from the SQLite B-Tree overflow pages.
 2. **External API**: Delegates embedding generation to an external server (such as llama.cpp or an OpenAI-compatible service) via command-line flags.
 
 #### Configuration Flags
@@ -98,7 +97,8 @@ Wikilite supports two methods for generating and processing embeddings:
 * **Endpoint URL**: Specify the API URL with `-ai-api-url` (defaults to `http://localhost:11434/v1/embeddings` for local llama.cpp instances).
 * **Authentication**: Use `-ai-api-key` to supply your API authorization key if required.
 * **Model Selection**: Define the target embedding model name using `-ai-model`.
-* **ANN Tuning**: Adjust Approximate Nearest Neighbor settings using `-ai-ann`, `-ai-ann-mode [mrl/binary]`, and `-ai-ann-size`.
+* **RAM Caching**: Use the `-ai-cache` flag to cache GGUF model tensors in memory. Caching speeds up native execution significantly at the cost of higher RAM usage.
+* **ANN Tuning**: Adjust Approximate Nearest Neighbor settings using `-ai-ann` and `-ai-ann-size`.
 * **Synchronization**: Run `-ai-sync` to generate the missing embeddings for your database.
 
 For example, to run an interactive CLI search utilizing a custom local llama.cpp instance for embeddings:

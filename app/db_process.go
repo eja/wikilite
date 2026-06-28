@@ -166,7 +166,7 @@ func (h *DBHandler) ProcessEmbeddings() (err error) {
 					return err
 				}
 
-				subBatchSize := 16
+				subBatchSize := 64
 				for i := 0; i < len(sections); i += subBatchSize {
 					endIdx := min(i+subBatchSize, len(sections))
 					chunk := sections[i:endIdx]

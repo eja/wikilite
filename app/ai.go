@@ -165,10 +165,6 @@ func aiApiEmbeddingsBatch(inputs []string) ([][]float32, error) {
 	return results, nil
 }
 
-func localAiEnabled() bool {
-	return true
-}
-
 func localAiInit(modelPath string) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
@@ -303,12 +299,4 @@ func localAiEmbeddings(input string) ([]float32, error) {
 
 	emb, err := globalMdl.embed(ids)
 	return emb, err
-}
-
-func clip(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }
