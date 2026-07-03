@@ -3,7 +3,7 @@
     package="it.eja.wikilite">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="${storagePermission}" />
     <application
         android:allowBackup="true"
         android:banner="@drawable/banner"

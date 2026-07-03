@@ -3,6 +3,8 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+val isGoogleBuild = project.hasProperty("googlePlay")
+
 android {
     namespace = "it.eja.wikilite"
     compileSdk = 36
@@ -11,8 +13,14 @@ android {
         applicationId = "it.eja.wikilite"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.6.26"
+        versionCode = 8
+        versionName = "1.7.3"
+
+        manifestPlaceholders["storagePermission"] = if (isGoogleBuild) {
+            "android.permission.INTERNET"
+        } else {
+            "android.permission.MANAGE_EXTERNAL_STORAGE"
+        }
 
         externalNativeBuild {
             cmake {

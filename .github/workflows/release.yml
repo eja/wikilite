@@ -120,11 +120,11 @@ jobs:
       - name: Build Libraries (Make)
         run: make
 
-      - name: Build AAB
+      - name: Build Default AAB
         run: |
           cd android && ./gradlew bundleRelease --no-daemon --warning-mode all
 
-      - name: Sign AAB
+      - name: Sign Default AAB
         id: sign_app_aab
         uses: kevin-david/zipalign-sign-android-release@v2
         with:
@@ -136,15 +136,15 @@ jobs:
         env:
           BUILD_TOOLS_VERSION: "34.0.0"
 
-      - name: Rename AAB
+      - name: Rename Default AAB
         run: |
           cp android/app/build/outputs/bundle/release/app-release.aab ${{ env.APP }}-android.aab
 
-      - name: Build APK
+      - name: Build Default APK
         run: |
           cd android && ./gradlew assembleRelease --no-daemon --warning-mode all
 
-      - name: Sign APK
+      - name: Sign Default APK
         id: sign_app_apk
         uses: kevin-david/zipalign-sign-android-release@v2
         with:
@@ -156,9 +156,53 @@ jobs:
         env:
           BUILD_TOOLS_VERSION: "34.0.0"
 
-      - name: Rename APK
+      - name: Rename Default APK
         run: |
           cp android/app/build/outputs/apk/release/app-release-unsigned-signed.apk ${{ env.APP }}-android.apk
+
+      - name: Clean build outputs
+        run: |
+          cd android && ./gradlew clean --no-daemon
+
+      - name: Build Google Play AAB
+        run: |
+          cd android && ./gradlew bundleRelease -PgooglePlay --no-daemon --warning-mode all
+
+      - name: Sign Google Play AAB
+        id: sign_google_aab
+        uses: kevin-david/zipalign-sign-android-release@v2
+        with:
+          releaseDirectory: android/app/build/outputs/bundle/release
+          signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE }}
+          alias: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        env:
+          BUILD_TOOLS_VERSION: "34.0.0"
+
+      - name: Rename Google Play AAB
+        run: |
+          cp android/app/build/outputs/bundle/release/app-release.aab ${{ env.APP }}-android-google.aab
+
+      - name: Build Google Play APK
+        run: |
+          cd android && ./gradlew assembleRelease -PgooglePlay --no-daemon --warning-mode all
+
+      - name: Sign Google Play APK
+        id: sign_google_apk
+        uses: kevin-david/zipalign-sign-android-release@v2
+        with:
+          releaseDirectory: android/app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.ANDROID_KEYSTORE }}
+          alias: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        env:
+          BUILD_TOOLS_VERSION: "34.0.0"
+
+      - name: Rename Google Play APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release-unsigned-signed.apk ${{ env.APP }}-android-google.apk
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
@@ -166,5 +210,7 @@ jobs:
           files: |
             ${{ env.APP }}-android.apk
             ${{ env.APP }}-android.aab
+            ${{ env.APP }}-android-google.apk
+            ${{ env.APP }}-android-google.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
