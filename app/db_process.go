@@ -321,7 +321,7 @@ func (h *DBHandler) ProcessANN() error {
 		return nil
 	}
 
-	k := totalCount / 2500
+	k := totalCount / VectorsPerCentroid
 	if k < 1 {
 		k = 1
 	}
@@ -425,8 +425,8 @@ func (h *DBHandler) ProcessANN() error {
 				return err
 			}
 
-			for gStart := 0; gStart < len(group); gStart += 2500 {
-				gEnd := gStart + 2500
+			for gStart := 0; gStart < len(group); gStart += VectorsPerCentroid {
+				gEnd := gStart + VectorsPerCentroid
 				if gEnd > len(group) {
 					gEnd = len(group)
 				}

@@ -12,6 +12,8 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
+const VectorsPerCentroid = 2500
+
 type DBHandler struct {
 	pool *sqlitex.Pool
 }

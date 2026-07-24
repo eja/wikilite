@@ -465,7 +465,10 @@ func (h *DBHandler) SearchAnn(vectors []float32, size int, limit int) ([]VectorD
 			return cDists[i].distance > cDists[j].distance
 		})
 
-		targetCount := limit * 2500
+		targetCount := limit * VectorsPerCentroid
+		if targetCount < (VectorsPerCentroid * 50) {
+			targetCount = VectorsPerCentroid * 50
+		}
 
 		var selectedChunkIDs []int64
 		accumulatedVectors := 0
@@ -520,7 +523,7 @@ func (h *DBHandler) SearchAnn(vectors []float32, size int, limit int) ([]VectorD
 		queryStr = "SELECT id, chunk FROM vectors_ann_chunks"
 	}
 
-	topAnnResults := make([]VectorDistance, 0, limit)
+	var topAnnResults []VectorDistance
 
 	err := sqlitex.ExecuteTransient(conn, queryStr, &sqlitex.ExecOptions{
 		ResultFunc: func(stmt *sqlite.Stmt) error {
@@ -529,32 +532,14 @@ func (h *DBHandler) SearchAnn(vectors []float32, size int, limit int) ([]VectorD
 			stmt.ColumnBytes(1, chunkBlob)
 
 			for position := 0; position < len(chunkBlob); position += chunkSize {
-				var result VectorDistance
 				embeddingBlob := chunkBlob[position : position+chunkSize]
-
-				var distance float32
 				storedMRL := BytesToFloat32(embeddingBlob)
-				distance = dot(mrlQuery, storedMRL)
 
-				result.ChunkRowID = chunkRowID
-				result.ChunkPosition = position / chunkSize
-				result.Distance = distance
-
-				if len(topAnnResults) < limit {
-					topAnnResults = append(topAnnResults, result)
-				} else {
-					minIndex := -1
-					minDistance := float32(2.0)
-					for i := range topAnnResults {
-						if topAnnResults[i].Distance < minDistance {
-							minDistance = topAnnResults[i].Distance
-							minIndex = i
-						}
-					}
-					if minIndex >= 0 && distance > minDistance {
-						topAnnResults[minIndex] = result
-					}
-				}
+				topAnnResults = append(topAnnResults, VectorDistance{
+					ChunkRowID:    chunkRowID,
+					ChunkPosition: position / chunkSize,
+					Distance:      dot(mrlQuery, storedMRL),
+				})
 			}
 			return nil
 		},
@@ -566,6 +551,10 @@ func (h *DBHandler) SearchAnn(vectors []float32, size int, limit int) ([]VectorD
 	sort.Slice(topAnnResults, func(i, j int) bool {
 		return topAnnResults[i].Distance > topAnnResults[j].Distance
 	})
+
+	if limit > 0 && len(topAnnResults) > limit {
+		topAnnResults = topAnnResults[:limit]
+	}
 
 	log.Printf("Search ANN time: %v", time.Since(start))
 	return topAnnResults, nil
