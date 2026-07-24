@@ -13,8 +13,8 @@ android {
         applicationId = "it.eja.wikilite"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.7.3"
+        versionCode = 9
+        versionName = "1.7.24"
 
         manifestPlaceholders["storagePermission"] = if (isGoogleBuild) {
             "android.permission.INTERNET"
